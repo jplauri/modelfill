@@ -236,9 +236,12 @@ around typical values. Choices are uniform, optional fields are `None` a quarter
 of the time, and strings are random lowercase text. Each example builds a fresh
 solver seeded from a Hypothesis draw, because an incremental solver's answers
 depend on its history; a fresh one makes every example a pure function of the
-draws, so failures replay and drawn fields shrink. A proven contradiction
-becomes `reject()`, which filters impossible draws without the
-excessive-filtering failures that `.filter()` would cause for cross-field rules.
+draws, so failures replay and drawn fields shrink; the solved fields replay but
+do not shrink. A proven contradiction becomes `reject()`. Hypothesis counts that
+as filtering, so drawn fields that are mostly impossible still trip its health
+check. The benefit is narrower: Hypothesis draws only the fields a test chooses,
+and modelfill solves the dependent ones, so complete objects never have to be
+drawn independently and filtered for cross-field rules.
 
 ## Verification and measurement
 

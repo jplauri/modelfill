@@ -174,7 +174,7 @@ filler.explain()  # fresh JSON-friendly dictionary
 | Area | Support |
 | --- | --- |
 | Pydantic | v2 `BaseModel`, inherited validators, scalar fields |
-| Dataclasses | Standard dataclasses, including frozen and slotted classes; pure `__post_init__` |
+| Dataclasses | Standard dataclasses, including frozen and slotted classes; pure `__post_init__`, when the generated `__init__` calls it (a subclass that is not decorated again never runs its own) |
 | Types | Exact `int`, `bool`, `str`, `date`, naive `datetime`, `timedelta`; ordinary `Enum`, `IntEnum`, `StrEnum`; homogeneous `Literal` subsets; any of these `\| None` (`Optional`, or `None` inside a `Literal`); other types as external fields |
 | Numeric metadata | Integer, date, datetime and timedelta `Field(gt, ge, lt, le)`, respecting strict and inclusive bounds; integer `Field(multiple_of)`; on optional fields they constrain non-None values, as in Pydantic |
 | String metadata | `Field(min_length, max_length)` and global `str_min_length` / `str_max_length` |
@@ -184,11 +184,14 @@ filler.explain()  # fresh JSON-friendly dictionary
 | Defaults | Copied values and zero-argument factories as preferences |
 | Fixed fields | Any subset, solved simultaneously; no left-to-right dependency order required |
 
-Pydantic field metadata is read through public `model_fields`. Validator
-discovery uses Pydantic's private `__pydantic_decorators__` registry; CI tests it
-against the oldest supported Pydantic release. Dataclass `Annotated` metadata is
-not a validation rule unless the dataclass's own code enforces it, so modelfill
-does not impose it.
+Pydantic field metadata is read through public `model_fields`, and combines as
+Pydantic combines it: when a field repeats one kind of bound, the last one wins,
+with `Field()` counted before `Annotated[...]`. So `Field(ge=10)` on an
+`Annotated[int, Ge(0)]` alias leaves `ge=0` in force, in Pydantic and modelfill
+alike. Validator discovery uses Pydantic's private `__pydantic_decorators__`
+registry; CI tests it against the oldest supported Pydantic release. Dataclass
+`Annotated` metadata is not a validation rule unless the dataclass's own code
+enforces it, so modelfill does not impose it.
 
 ### Exact recognized validator language
 
@@ -383,10 +386,12 @@ def test_shift_rules(shift):
 ```
 
 Draws that make the rules impossible (here `break_minutes` outside 0–60) are
-rejected rather than failing the test, and cross-field rules never need
-`.filter()`. Each example uses a fresh solver seeded from the draw, so failing
-examples replay and the drawn fields shrink as usual. The solved fields replay
-too, but do not shrink.
+rejected rather than failing the test. Hypothesis counts a rejection like a
+`.filter()`, so a strategy that mostly draws impossible values still fails its
+health check; draw the fields you choose from mostly possible values. The solved
+fields never need filtering, however the rules tie them together. Each example
+uses a fresh solver seeded from the draw, so failing examples replay and the
+drawn fields shrink as usual. The solved fields replay too, but do not shrink.
 
 ## Development
 

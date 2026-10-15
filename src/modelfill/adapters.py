@@ -146,7 +146,9 @@ def _metadata_constraints(
     """A field's own constraints, as (label, rule) pairs."""
     result: list[tuple[str, Expr]] = []
     expression = var(name, domain)
-    for item in metadata:
+    # Pydantic keeps the last constraint of each kind, with Field() before Annotated[...]:
+    # Field(ge=10) on an Annotated[int, Ge(0)] alias leaves ge=0 in force.
+    for item in {type(item): item for item in metadata}.values():
         if isinstance(item, Strict):
             continue  # All generated/fixed inputs already have their canonical type.
         if isinstance(item, (Gt, Ge, Lt, Le)) and domain.kind in TIME_TYPES:
@@ -399,11 +401,11 @@ def _dataclass(model: type[DataclassInstance]) -> Adapter:
         ):
             unsupported.append(f"Dataclass field {info.name!r} uses a custom descriptor")
     post_init = getattr(model, "__post_init__", None)
-    validators = (
-        (ValidatorSpec("__post_init__", post_init, "dataclass", "after"),)
-        if post_init is not None
-        else ()
-    )
+    # A generated __init__ calls __post_init__ only if one existed when @dataclass ran,
+    # so the hook of a subclass that was not decorated again never runs.
+    code = getattr(initializer, "__code__", None)
+    runs = post_init is not None and code is not None and "__post_init__" in code.co_names
+    validators = (ValidatorSpec("__post_init__", post_init, "dataclass", "after"),) if runs else ()
     return Adapter(model, tuple(fields), (), validators, tuple(unsupported))
 
 

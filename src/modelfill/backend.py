@@ -60,15 +60,17 @@ class Solver:
         # on any machine; the timeout is only a safety net. Z3's own search stays
         # deterministic too; exploration varies its preferences in Python instead.
         self.engine.set(rlimit=work_limit, timeout=timeout_ms, random_seed=0)
+        # Solver names are internal (v0, n0, ...), so no field name, such as "part0" or
+        # "a is None", can collide with another field's symbol or with explanation trackers.
         self.variables = {
             name: {"bool": z3.Bool, "str": z3.String}.get(domain.kind, z3.Int)(
-                name, ctx=self.context
+                f"v{index}", ctx=self.context
             )
-            for name, domain in domains.items()
+            for index, (name, domain) in enumerate(domains.items())
         }
         self.flags = {
-            name: z3.Bool(f"{name} is None", ctx=self.context)
-            for name, domain in domains.items()
+            name: z3.Bool(f"n{index}", ctx=self.context)
+            for index, (name, domain) in enumerate(domains.items())
             if domain.nullable
         }
         # What each field's type allows, labeled so that contradictions can cite it.
@@ -199,11 +201,11 @@ class Solver:
         ]
         parts = inputs + self.facts + [(label, self.translate(expr)) for label, expr in rules]
         for index, (_, constraint) in enumerate(parts):
-            explainer.assert_and_track(constraint, z3.Bool(f"part{index}", self.context))
+            explainer.assert_and_track(constraint, z3.Bool(f"t{index}", self.context))
         if explainer.check() != z3.unsat:
             return [], []
         core = {str(literal) for literal in explainer.unsat_core()}
-        cited = [index for index in range(len(parts)) if f"part{index}" in core]
+        cited = [index for index in range(len(parts)) if f"t{index}" in core]
         given = [parts[index][0] for index in cited if index < len(inputs)]
         return given, [parts[index][0] for index in cited if index >= len(inputs)]
 

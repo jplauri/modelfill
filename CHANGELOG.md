@@ -31,6 +31,23 @@ deterministic values, and bug hunting is an explicit opt-in through Hypothesis.
   canonical assignment, so it only reruns construction.
 - Auto-mode fallback tries candidates in a deterministic canonical order.
 
+### Fixes
+
+Each of these could claim a valid assignment impossible:
+
+- When a field repeats one kind of constraint, the last one now wins, as in
+  Pydantic, instead of all of them applying. For example, `Field(ge=10)` on an
+  `Annotated[int, Ge(0)]` alias leaves `ge=0` in force.
+- Solver symbols use internal names, so a field name such as `"a is None"` can no
+  longer collide with another field's None flag. A field named `part0` also no
+  longer corrupts the explanation of a genuine contradiction.
+- A dataclass `__post_init__` counts as a validator only if the generated
+  `__init__` calls it. The hook of a subclass that was not decorated again never
+  runs, so it no longer restricts values.
+
+The documentation also no longer claims that rejected Hypothesis draws avoid
+filtering: Hypothesis counts them toward its health checks.
+
 ## 0.1.0
 
 Initial release.

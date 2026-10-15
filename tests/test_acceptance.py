@@ -6,15 +6,17 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from itertools import product
-from typing import ClassVar, Literal
+from typing import Annotated, ClassVar, Literal, get_args
 from uuid import UUID, uuid4
 
 import pytest
+from annotated_types import Ge, Gt, Le, Lt, MaxLen, MinLen, MultipleOf
 from pydantic import (
     BaseModel,
     Field,
     ValidationError,
     ValidationInfo,
+    create_model,
     field_validator,
     model_validator,
 )
@@ -135,6 +137,51 @@ def test_dataclass_relationship_and_default():
     assert fill(DataclassMeeting, start=10).duration == 2
     with pytest.raises(UnsatisfiableConstraints):
         fill(DataclassMeeting, start=17, duration=4)
+
+
+@dataclass
+class HookedParent:
+    x: int
+
+    def __post_init__(self):
+        if self.x < 0:
+            raise ValueError("negative")
+
+
+@dataclass
+class PlainParent:
+    x: int
+
+
+class UndecoratedHook(PlainParent):  # PlainParent's generated __init__ never calls this.
+    def __post_init__(self):
+        if self.x < 0:
+            raise ValueError("never runs")
+
+
+class UndecoratedOverride(HookedParent):  # The inherited __init__ calls this override.
+    def __post_init__(self):
+        if self.x > 0:
+            raise ValueError("positive")
+
+
+@dataclass
+class DecoratedInherited(HookedParent):  # Generated again, so it calls the inherited hook.
+    pass
+
+
+@pytest.mark.parametrize(
+    "model", [HookedParent, UndecoratedHook, UndecoratedOverride, DecoratedInherited]
+)
+def test_dataclass_hooks_count_only_when_the_initializer_calls_them(model):
+    for x in (-1, 0, 1):
+        try:
+            expected = model(x=x)
+        except ValueError:
+            with pytest.raises(UnsatisfiableConstraints):
+                fill(model, x=x)
+        else:
+            assert fill(model, x=x) == expected
 
 
 class CallValidator(BaseModel):
@@ -449,6 +496,44 @@ def test_fill_matches_original_constructor_exhaustively(model, grid):
                 filler.fill(**inputs)
         else:
             assert filler.fill(**inputs) == expected
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        Annotated[int, Ge(10), Ge(0)],
+        Annotated[int, Ge(0), Ge(10)],
+        Annotated[int, Gt(5), Ge(0)],
+        Annotated[int, Lt(3), Le(9)],
+        Annotated[int, MultipleOf(5), MultipleOf(2)],
+        Annotated[int, Ge(0), Le(9), Ge(5)],
+        Annotated[str, MinLen(10), MinLen(1)],
+        Annotated[str, MaxLen(1), MaxLen(5)],
+    ],
+)
+def test_repeated_metadata_combines_as_in_pydantic(annotation):
+    model = create_model("Repeated", value=(annotation, ...))
+    grid = range(-2, 13) if get_args(annotation)[0] is int else ["", "a", "abc", "abcdefghijk"]
+    filler = ModelFiller(model, mode="strict")
+    for value in grid:
+        try:
+            expected = model(value=value)
+        except ValidationError:
+            with pytest.raises(UnsatisfiableConstraints):
+                filler.fill(value=value)
+        else:
+            assert filler.fill(value=value) == expected
+
+
+NonNegativeInt = Annotated[int, Ge(0)]
+
+
+class Tightened(BaseModel):
+    cents: NonNegativeInt = Field(ge=10)  # Field() comes first, so the alias's ge=0 wins.
+
+
+def test_field_metadata_on_an_annotated_alias_combines_as_in_pydantic():
+    assert Tightened(cents=5).cents == fill(Tightened, cents=5).cents == 5
 
 
 class RestrictedEnum(BaseModel):

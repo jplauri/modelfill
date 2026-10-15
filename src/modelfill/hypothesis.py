@@ -28,8 +28,9 @@ def from_model[T](
     field.
     Unlike ``fill``, the solved fields are explored: random, often at the edges of
     their feasible ranges. Draws that make the rules impossible are rejected instead
-    of failing, and each example uses a fresh solver seeded from the draw, so
-    Hypothesis can replay and shrink it.
+    of failing; Hypothesis counts that as filtering. Each example uses a fresh solver
+    seeded from the draw, so examples replay and the drawn fields shrink; the solved
+    fields do not shrink.
     """
     template = model if isinstance(model, ModelFiller) else ModelFiller(model)
     strategies = {

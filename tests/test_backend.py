@@ -3,7 +3,7 @@ from typing import Literal
 
 import pytest
 import z3
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, create_model, model_validator
 
 from modelfill import (
     GenerationExhausted,
@@ -42,6 +42,20 @@ def test_session_is_restored_after_exception():
     with solver.session({"x": 4}):
         assert solver.check()
         assert solver.values() == {"x": 4}
+
+
+def test_field_names_never_collide_with_solver_symbols():
+    # "a is None" once named the flag of the optional field a, making this impossible.
+    clash = create_model("Clash", a=(int | None, ...), **{"a is None": (bool, ...)})
+    values = {"a": None, "a is None": False}
+    assert fill(clash, **values) == clash(**values)
+
+    class Parts(BaseModel):  # part0 once named an explanation tracker.
+        part0: bool
+        x: int = Field(ge=10)
+
+    with pytest.raises(UnsatisfiableConstraints, match="x=5 conflict with x >= 10"):
+        fill(Parts, part0=False, x=5)
 
 
 def test_outside_z3_unicode_is_explicitly_unsupported():
