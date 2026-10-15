@@ -398,6 +398,7 @@ drawn fields shrink as usual. The solved fields replay too, but do not shrink.
 ```sh
 uv sync
 uv run pytest
+uv run pytest tests/test_properties.py --hypothesis-profile=deep  # a longer random search
 ```
 
 [CI](https://github.com/jplauri/modelfill/blob/master/.github/workflows/ci.yml) runs

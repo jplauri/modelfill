@@ -1,0 +1,207 @@
+"""Generated inputs, checked against oracles independent of modelfill.
+
+The oracles are Pydantic, plain Python execution and brute force. Example counts
+and randomness come from the Hypothesis profiles in conftest.py.
+"""
+
+import itertools
+import linecache
+import random
+from datetime import date, datetime, timedelta
+from types import SimpleNamespace
+from typing import Annotated
+
+import pytest
+from annotated_types import Ge, Gt, Le, Lt, MaxLen, MinLen, MultipleOf
+from hypothesis import assume, given
+from hypothesis import strategies as st
+from pydantic import BaseModel, Field, ValidationError, create_model, model_validator
+
+from examples.meeting import Meeting
+from modelfill import ModelFiller, UnsatisfiableConstraints, UnsupportedConstraint, fill
+from modelfill.backend import Solver
+from modelfill.extract import extract_validator
+from modelfill.ir import INT, decode, encode
+
+# Z3 strings cover U+0000 to U+2FFFF; surrogates are not text.
+TEXT = st.text(
+    st.characters(max_codepoint=0x2FFFF).filter(lambda char: not 0xD800 <= ord(char) <= 0xDFFF),
+    max_size=12,
+)
+
+
+@given(
+    st.one_of(
+        st.tuples(st.dates(), st.dates()),
+        st.tuples(st.datetimes(), st.datetimes()),
+        st.tuples(st.timedeltas(), st.timedeltas()),
+    )
+)
+def test_time_encodings_round_trip_and_keep_order(pair):
+    first, second = pair
+    kind = {date: "date", datetime: "datetime", timedelta: "timedelta"}[type(first)]
+    assert decode(kind, encode(first)) == first
+    assert (encode(first) < encode(second)) == (first < second)
+
+
+class Measured(BaseModel):
+    text: str
+    size: int
+
+    @model_validator(mode="after")
+    def check(self):
+        if len(self.text) != self.size:
+            raise ValueError("size")
+        return self
+
+
+@given(TEXT)
+def test_solver_string_lengths_match_python(text):
+    assert fill(Measured, text=text).size == len(text)
+
+
+class Mirror(BaseModel):
+    original: str
+    duplicate: str
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.duplicate != self.original:
+            raise ValueError("duplicate")
+        return self
+
+
+@given(TEXT, st.integers(0, 2**32 - 1))
+def test_the_sampler_decodes_solver_strings_exactly(text, seed):
+    # from_model's sampler reads every value back from the solver's model.
+    mirror = ModelFiller(Mirror)._complete({"original": text}, 1, random.Random(seed))[0]
+    assert mirror.duplicate == text
+
+
+SMALL = st.integers(-8, 8)
+LENGTHS = st.integers(0, 6)
+METADATA = {  # Annotated items, Field() arguments and values to try, per base type.
+    int: (
+        st.one_of(
+            SMALL.map(Ge),
+            SMALL.map(Gt),
+            SMALL.map(Le),
+            SMALL.map(Lt),
+            st.integers(1, 5).map(MultipleOf),
+        ),
+        st.dictionaries(st.sampled_from(["ge", "gt", "le", "lt"]), SMALL, max_size=2),
+        st.integers(-10, 10),
+    ),
+    str: (
+        st.one_of(LENGTHS.map(MinLen), LENGTHS.map(MaxLen)),
+        st.dictionaries(st.sampled_from(["min_length", "max_length"]), LENGTHS, max_size=2),
+        st.text("ab", max_size=8),
+    ),
+}
+
+
+@given(st.data())
+def test_metadata_combines_as_in_pydantic(data):
+    base = data.draw(st.sampled_from([int, str]))
+    annotated, field, values = METADATA[base]
+    items = data.draw(st.lists(annotated, min_size=1, max_size=4))
+    model = create_model("Combined", value=(Annotated[base, *items], Field(**data.draw(field))))
+    value = data.draw(values)
+    filler = ModelFiller(model, mode="strict")
+    try:
+        expected = model(value=value)
+    except ValidationError:
+        with pytest.raises(UnsatisfiableConstraints):
+            filler.fill(value=value)
+    else:
+        assert filler.fill(value=value) == expected
+
+
+@given(st.dictionaries(st.sampled_from(["start", "end", "duration"]), st.integers(-1, 20)))
+def test_canonical_meetings_are_stable_and_impossibility_is_real(partial):
+    try:
+        meeting = fill(Meeting, **partial)
+    except UnsatisfiableConstraints:
+        # Every valid meeting lies in this range, so brute force is a complete check.
+        for start, end, duration in itertools.product(range(-1, 21), repeat=3):
+            values = {"start": start, "end": end, "duration": duration}
+            if values.items() >= partial.items():
+                with pytest.raises(ValidationError):
+                    Meeting(**values)
+        return
+    for name, value in meeting.model_dump().items():  # A field fixed to its value changes nothing.
+        assert fill(Meeting, **(partial | {name: value})) == meeting
+    assert ModelFiller(Meeting).batch(1, **partial) == [meeting]
+
+
+# Random validators over two integer fields, within the supported grammar.
+ATOMS = st.sampled_from(["self.a", "self.b"]) | st.integers(-4, 4).map(str)
+TERMS = st.recursive(
+    ATOMS,
+    lambda inner: st.one_of(
+        st.tuples(inner, st.sampled_from(["+", "-"]), inner).map(
+            lambda t: f"({t[0]} {t[1]} {t[2]})"
+        ),
+        st.tuples(st.integers(-3, 3), inner).map(lambda t: f"({t[0]} * {t[1]})"),
+        st.tuples(inner, st.sampled_from(["%", "//"]), st.integers(1, 4)).map(
+            lambda t: f"({t[0]} {t[1]} {t[2]})"
+        ),
+        inner.map(lambda term: f"(-{term})"),
+    ),
+    max_leaves=4,
+)
+OPERATORS = st.sampled_from(["==", "!=", "<", "<=", ">", ">="])
+CONDITIONS = st.recursive(
+    st.one_of(
+        TERMS,  # Tested for truth.
+        st.tuples(TERMS, OPERATORS, TERMS).map(" ".join),
+        st.tuples(TERMS, OPERATORS, TERMS, OPERATORS, TERMS).map(" ".join),  # Chained.
+    ),
+    lambda inner: st.one_of(
+        inner.map(lambda condition: f"not ({condition})"),
+        st.tuples(inner, st.sampled_from(["and", "or"]), inner).map(
+            lambda t: f"({t[0]}) {t[1]} ({t[2]})"
+        ),
+    ),
+    max_leaves=3,
+)
+STATEMENTS = st.one_of(
+    CONDITIONS.map(lambda c: f"    if {c}:\n        raise ValueError('rejected')"),
+    CONDITIONS.map(lambda c: f"    if {c}:\n        return self"),
+    CONDITIONS.map(lambda c: f"    assert {c}"),
+    st.tuples(CONDITIONS, CONDITIONS).map(
+        lambda t: (
+            f"    if {t[0]}:\n        if {t[1]}:\n            raise ValueError('rejected')\n"
+            f"    elif {t[1]}:\n        return self"
+        )
+    ),
+)
+NAMES = itertools.count()
+
+
+def define(source):
+    """Define a function whose source inspect can retrieve, as extraction requires."""
+    filename = f"<generated validator {next(NAMES)}>"
+    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+    namespace = {}
+    exec(compile(source, filename, "exec"), namespace)
+    return namespace["check"]
+
+
+@given(st.lists(STATEMENTS, min_size=1, max_size=3))
+def test_generated_validators_are_extracted_exactly_or_refused(statements):
+    validator = define("def check(self):\n" + "\n".join(statements) + "\n    return self\n")
+    fields = {"a": INT, "b": INT}
+    try:
+        expression = extract_validator(validator, fields)
+    except UnsupportedConstraint:
+        assume(False)  # Refusing is sound; only what is extracted must be exact.
+    solver = Solver(fields, (expression,), timeout_ms=1000, work_limit=10**6)
+    for a, b in itertools.product(range(-5, 6), repeat=2):
+        try:
+            validator(SimpleNamespace(a=a, b=b))
+            accepted = True
+        except (ValueError, AssertionError):
+            accepted = False
+        with solver.session({"a": a, "b": b}):
+            assert solver.check() is accepted, (statements, a, b)

@@ -252,6 +252,16 @@ fields, and bounded fallback. Exhaustive small-domain differential tests compare
 fixed assignments against ordinary Python validation, especially branch
 reachability, Boolean operands, `None` guards and date arithmetic.
 
+Property tests generate inputs and check them against oracles independent of
+modelfill: random validators within the supported grammar against plain Python,
+random metadata combinations against Pydantic, every impossibility claim for
+partial meetings against brute force, plus date and string round trips through
+the solver and the stability of canonical values. Final validation protects only
+the objects modelfill returns; a false impossibility claim never reaches the
+constructor, so these oracles are what guard the UNSAT guarantee. CI runs a
+repeatable 100 examples per property; the `deep` profile searches longer at
+random.
+
 `uv run python -m benchmarks.benchmark --count 100 --repeat 5` reports local
 medians. Cold compiles and solves; cold measurements create fresh Pydantic
 subclasses to avoid the model cache, so they also include class creation
