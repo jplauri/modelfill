@@ -15,13 +15,14 @@ import pytest
 from annotated_types import Ge, Gt, Le, Lt, MaxLen, MinLen, MultipleOf
 from hypothesis import assume, given
 from hypothesis import strategies as st
-from pydantic import BaseModel, Field, ValidationError, create_model, model_validator
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, create_model, model_validator
 
 from examples.meeting import Meeting
 from modelfill import ModelFiller, UnsatisfiableConstraints, UnsupportedConstraint, fill
 from modelfill.backend import Solver
 from modelfill.extract import extract_validator
 from modelfill.ir import INT, decode, encode
+from modelfill.patterns import Pattern
 
 # Z3 strings cover U+0000 to U+2FFFF; surrogates are not text.
 TEXT = st.text(
@@ -220,3 +221,46 @@ def test_generated_validators_are_extracted_exactly_or_refused(shape, data):
             accepted = False
         with solver.session(dict(zip(names, (a, b), strict=True))):
             assert solver.check() is accepted, (statements, a, b)
+
+
+# Pattern pieces with the same meaning in Python's syntax and Rust's, which Pydantic uses.
+ATOMS = ["a", "Z", "7", "-", "@", r"\.", ".", "[a-z]", "[A-Z0-9]", "[^a]", "[^@\\s]"]
+ATOMS += [r"\d", r"\D", r"\s", r"\w", r"\W", "[a-f0-9_]"]
+QUANTIFIERS = ["", "", "*", "+", "?", "{2}", "{1,3}", "{0,2}"]
+PIECES = st.tuples(st.sampled_from(ATOMS), st.sampled_from(QUANTIFIERS)).map("".join)
+
+
+def anchored(inner: st.SearchStrategy[str]) -> st.SearchStrategy[str]:
+    """Alternatives, each perhaps anchored at either end."""
+    alternative = st.tuples(st.sampled_from(["", "^"]), inner, st.sampled_from(["", "$"]))
+    return st.lists(alternative.map("".join), min_size=1, max_size=3).map("|".join)
+
+
+def grouped(inner: st.SearchStrategy[str]) -> st.SearchStrategy[str]:
+    parts = st.tuples(
+        st.sampled_from(["(", "(?:", "(?i:", "(?-i:"]),
+        anchored(inner),
+        st.sampled_from(QUANTIFIERS),
+    )
+    return parts.map(lambda part: f"{part[0]}{part[1]}){part[2]}")
+
+
+BODIES = st.recursive(
+    st.lists(PIECES, min_size=1, max_size=4).map("".join),
+    lambda inner: st.lists(st.one_of(inner, grouped(inner)), min_size=1, max_size=3).map("".join),
+    max_leaves=6,
+)
+REGEXES = st.tuples(st.sampled_from(["", "(?i)"]), anchored(BODIES)).map("".join)
+
+
+@given(REGEXES, st.sampled_from(["code", "zip", "e"]), st.integers(0, 2**32 - 1))
+def test_spelled_and_sampled_values_match_as_pydantic_says(regex, name, seed):
+    metadata = tuple(Field(pattern=regex).metadata)
+    oracle = TypeAdapter(Annotated[str, *metadata])
+    pattern = Pattern(regex, metadata, None)
+    assert pattern.automaton is not None  # Every generated construct is read.
+    values = list(itertools.islice(pattern.spell(name, lambda size: True, 0), 3))
+    values.append(pattern.sample(random.Random(seed)))
+    for value in values:
+        if value is not None:
+            assert oracle.validate_python(value) == value, (regex, value)

@@ -212,6 +212,46 @@ solver and private Z3 context; only compiled immutable information is shared.
 Compilation and the top-level convenience filler use bounded LRU caches keyed by
 model class.
 
+## String patterns
+
+A string field's pattern stays out of Z3. As a Z3 regular expression, with each
+character of a canonical value pinned by probes, every pattern using `\d` (71
+Unicode digit ranges) exhausted the default work limit, and the other realistic
+patterns tried took 22 ms to 1.5 s per value. Instead the solver ignores the
+pattern and therefore allows more values than Pydantic does, never fewer, so a
+proof of impossibility stays sound. Each candidate goes through the field's own
+Pydantic validation, which decides exactly, for either regex engine, flags and
+compiled patterns included. A fixed value that fails it is a proven
+contradiction, unless unsupported logic, such as a before validator, could
+change the value first, or the value comes from a given nested instance, which
+is used as it is. When the rules and a pattern cannot both hold, the search ends
+in `GenerationExhausted`; proving such conflicts would need the pattern in Z3.
+
+Values are spelled in Python, in well under 3 ms for the same patterns. Python's
+regex parser reads the pattern into a nondeterministic automaton for Pydantic's
+search semantics: anything may come before and after a match, `^` and `$` are
+edges that hold only at the very start and end, as in Rust, and under `(?i)` a
+negated set also leaves out the case variants of what it names. For each length,
+the automaton knows which states can still complete a match, so a depth-first
+walk in a fixed character order never hits a dead end: the name's letters while
+the value still spells the name, then `a`-`z`, `A`-`Z`, `0`-`9`, then each set's
+least character. The length is the one nearest the name's if a value can start
+with its first letter, and the shortest otherwise. Python's and Rust's syntax and
+Unicode tables differ in corners, such as `\w` or nested sets, but a value the
+automaton gets wrong is merely rejected by Pydantic. A pattern the parser cannot
+read, or whose automaton would exceed 4096 states, is only checked.
+
+Among a field's candidates, the first spelled value comes right after the
+name's, so different fields keep values of their own; the strings that rules and
+other fields mention come next, for when the rules exclude that value, and up to
+255 further spelled values follow. Each length's first value is checked before Z3
+is asked whether the field may have that length at all: Z3 4.16 needs about 3 s to
+build a free string of 100 characters and gives up on longer ones, while checking
+a given value takes milliseconds. So a 128-character digest still fills, but only
+a value the rules reject leads Z3 into that slow question; a plain string field
+that must be that long hits it already. Exploration prefers random members drawn
+the same way.
+
 ## CrossHair decision
 
 [CrossHair's implementation guide](https://crosshair.readthedocs.io/en/latest/how_does_it_work.html)
@@ -281,8 +321,9 @@ reachability, Boolean operands, `None` guards and date arithmetic.
 Property tests generate inputs and check them against oracles independent of
 modelfill: random validators within the supported grammar against plain Python,
 random metadata combinations against Pydantic, every impossibility claim for
-partial meetings against brute force, plus date and string round trips through
-the solver and the stability of canonical values. Final validation protects only
+partial meetings against brute force, values spelled and sampled from random
+patterns against Pydantic, plus date and string round trips through the solver
+and the stability of canonical values. Final validation protects only
 the objects modelfill returns; a false impossibility claim never reaches the
 constructor, so these oracles are what guard the UNSAT guarantee. CI runs a
 repeatable 100 examples per property; the `deep` profile searches longer at
