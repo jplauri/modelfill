@@ -14,6 +14,11 @@
   path, such as `"customer.email"`. A path beats a type, and a provider beats the
   model's default.
 - `explain()` reports where each such field's value comes from.
+- Rules across nested models: a required nested model is solved with its parent.
+  Validators may read `self.customer.age`, a fixed parent field can determine
+  nested fields and the other way round, and impossibility is proven across the
+  whole object, with explanations by path. Optional nested models and those with
+  defaults are still completed on their own.
 
 ### Fixed
 

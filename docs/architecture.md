@@ -138,6 +138,26 @@ outside that range are explicitly unsupported. Literal backslashes are escaped
 when crossing the solver boundary, and solver escape decoding uses one pass so a
 Python string such as `r"\u{41}"` remains literal text.
 
+## Nested models
+
+A required nested model is solved with its parent rather than beside it. Its
+compiled fields, field constraints and validator predicates join the parent's
+under paths such as `customer.age`, at the nested field's place in declaration
+order, so the parent's rules can read `self.customer.age` and fixing either side
+can determine the other. The extractor resolves such attribute chains to those
+paths; reading the nested object as a whole stays unsupported, because the
+solver only knows its fields. Construction builds each nested object from its
+solved values and its own external fields, innermost first, then the parent. A
+given nested instance is used as it is, and its solved values become fixed, so
+the parent's rules see them.
+
+Unsupported logic inside a nested model counts for the whole object: an unknown
+hook there could change values the parent's rules read, so every predicate is
+demoted to guidance, as for unsupported logic in the parent itself. Optional
+nested models and those with defaults are completed on their own, and a rule
+that reads one is unsupported. A model that contains itself is never solved this
+way, so filling it reports the problem.
+
 ## Canonical completion
 
 Canonical completion is incremental pinning on the same solver that proves

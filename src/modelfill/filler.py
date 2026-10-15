@@ -22,27 +22,86 @@ from .errors import (
     UnsupportedConstraint,
 )
 from .extract import extract_validator
-from .ir import Domain, Expr, encodable
+from .ir import Domain, Expr, encodable, prefixed
 
 
 @dataclass(frozen=True)
 class _Compiled:
     adapter: Adapter
-    domains: dict[str, Domain]  # Generated fields only; external fields pass through.
-    constraints: tuple[tuple[str, Expr], ...]  # (label, rule)
-    guidance: tuple[Expr, ...]
+    # Solved fields, with a required nested model's fields as paths such as "customer.age";
+    # external fields pass through.
+    domains: dict[str, Domain]
+    solved: tuple[tuple[str, FieldSpec], ...]  # The same fields' specs, for their defaults.
+    rules: tuple[tuple[str, Expr], ...]  # Field constraints, as (label, rule).
+    predicates: tuple[tuple[str, Expr], ...]  # Extracted validators, as (label, predicate).
     validators: tuple[tuple[str, str, str], ...]
     unsupported: tuple[str, ...]
-    unchecked: tuple[str, ...]  # Generated fields whose defaults Pydantic does not validate.
+    unchecked: tuple[str, ...]  # Solved fields whose defaults Pydantic does not validate.
+    nested: tuple[tuple[str, type], ...]  # Required nested models, solved with this one.
+
+    @property
+    def constraints(self) -> tuple[tuple[str, Expr], ...]:
+        # An unknown hook may transform values before another validator runs, so its
+        # neighbors' predicates may then only guide the search, never constrain it.
+        return self.rules + (() if self.unsupported else self.predicates)
+
+    @property
+    def guidance(self) -> tuple[Expr, ...]:
+        return tuple(rule for _, rule in self.predicates) if self.unsupported else ()
+
+
+_COMPILING = threading.local()  # The models being compiled, to stop a model nesting itself.
+
+
+def _relabel(label: str, prefix: str) -> str:
+    """Field constraint labels start with the field, or len(field): prefix that field."""
+    return f"len({prefix}{label[4:]}" if label.startswith("len(") else prefix + label
 
 
 @lru_cache(maxsize=128)
 def _compile(model: type) -> _Compiled:
     adapter = introspect(model)
-    domains = {field.name: field.domain for field in adapter.fields if field.domain is not None}
+    stack = _COMPILING.__dict__.setdefault("stack", [])
+    stack.append(model)
+    try:
+        return _compile_fields(model, adapter, stack)
+    finally:
+        stack.pop()
+
+
+def _compile_fields(model: type, adapter: Adapter, stack: list[type]) -> _Compiled:
+    domains: dict[str, Domain] = {}
+    solved: list[tuple[str, FieldSpec]] = []
+    rules = list(adapter.constraints)
     predicates: list[tuple[str, Expr]] = []
-    diagnostics = []
+    diagnostics: list[tuple[str, str, str]] = []
     unsupported = list(adapter.unsupported)
+    unchecked: list[str] = []
+    nested: list[tuple[str, type]] = []
+    for field in adapter.fields:
+        if field.domain is not None:
+            domains[field.name] = field.domain
+            solved.append((field.name, field))
+            if field.unchecked_default:
+                unchecked.append(field.name)
+            continue
+        # Only a required nested model joins this solver; others are completed alone.
+        inner = nested_model(field.annotation)
+        if inner is not field.annotation or not field.required or inner in stack:
+            continue
+        try:
+            sub = _compile(inner)
+        except UnsupportedConstraint:
+            continue  # Filling reports why this nested model cannot be completed.
+        prefix = f"{field.name}."
+        nested.append((field.name, inner))
+        domains.update({prefix + name: domain for name, domain in sub.domains.items()})
+        solved += [(prefix + name, spec) for name, spec in sub.solved]
+        rules += [(_relabel(label, prefix), prefixed(rule, prefix)) for label, rule in sub.rules]
+        predicates += [(label, prefixed(rule, prefix)) for label, rule in sub.predicates]
+        diagnostics += [(prefix + name, status, detail) for name, status, detail in sub.validators]
+        unsupported += [f"{field.name}: {reason}" for reason in sub.unsupported]
+        unchecked += [prefix + name for name in sub.unchecked]
     for validator in adapter.validators:
         name = validator.name
         if validator.field_name:
@@ -63,13 +122,16 @@ def _compile(model: type) -> _Compiled:
         else:
             predicates.append((_label(validator.function), predicate))
             diagnostics.append((name, "modeled", "pure rejection validator"))
-    # An unknown hook may transform values before another validator runs, so its
-    # neighbors' predicates may then only guide the search, never constrain it.
-    constraints = adapter.constraints + (() if unsupported else tuple(predicates))
-    guidance = tuple(rule for _, rule in predicates) if unsupported else ()
-    unchecked = tuple(f.name for f in adapter.fields if f.unchecked_default and f.name in domains)
     return _Compiled(
-        adapter, domains, constraints, guidance, tuple(diagnostics), tuple(unsupported), unchecked
+        adapter,
+        domains,
+        tuple(solved),
+        tuple(rules),
+        tuple(predicates),
+        tuple(diagnostics),
+        tuple(unsupported),
+        tuple(unchecked),
+        tuple(nested),
     )
 
 
@@ -78,6 +140,13 @@ def _label(function: Any) -> str:
     code = getattr(function, "__code__", None)
     line = f" (line {code.co_firstlineno})" if code is not None else ""
     return f"{getattr(function, '__qualname__', function)}{line}"
+
+
+def _get(instance: Any, path: str) -> Any:
+    """A field by path: "customer.age" reads instance.customer.age."""
+    for name in path.split("."):
+        instance = getattr(instance, name, MISSING)
+    return instance
 
 
 def _contradiction(model: str, given: list[str], rules: list[str]) -> str:
@@ -187,18 +256,18 @@ class ModelFiller[T]:
         self, fixed_fields: dict[str, Any], count: int, rng: random.Random | None = None
     ) -> list[T]:
         """count validated completions: canonical ones, or explored with rng (Hypothesis)."""
-        adapter, domains = self._compiled.adapter, self._compiled.domains
-        adapter.check_fixed(fixed_fields)
+        domains = self._compiled.domains
+        self._compiled.adapter.check_fixed(fixed_fields)
         # The solver sees generated fields; external values go straight to the constructor.
         inputs, chosen = self._inputs(fixed_fields)
-        solved = {name: value for name, value in fixed_fields.items() if name in domains}
+        solved = {name: value for name, value in inputs.items() if name in domains}
         defaults = {}
-        for field in adapter.fields:
-            if field.name in domains and field.name not in fixed_fields:
+        for name, field in self._compiled.solved:
+            if name not in solved:
                 value = field.preferred()
                 # A default the solver cannot represent is simply not preferred.
-                if domains[field.name].accepts(value) and encodable(value):
-                    defaults[field.name] = value
+                if domains[name].accepts(value) and encodable(value):
+                    defaults[name] = value
         solver = self._solver()
         # A canonical completion depends only on these, so repeated fills reuse it.
         key = (frozenset(solved.items()), tuple(defaults.items()))
@@ -209,7 +278,7 @@ class ModelFiller[T]:
             except (ValueError, AssertionError):
                 del cache[key]  # Validation is meant to be deterministic; search again.
         last_error: Exception | None = None
-        omitted = [name for name in self._compiled.unchecked if name not in fixed_fields]
+        omitted = [name for name in self._compiled.unchecked if name not in solved]
         results: list[T] = []
         failures = 0
         with solver.session(solved):
@@ -242,7 +311,9 @@ class ModelFiller[T]:
                 except (ValueError, AssertionError) as exc:
                     # Retrying changes only solved fields, so it cannot fix a value modelfill
                     # chose for another field.
-                    if isinstance(exc, ValidationError) and (
+                    # Only this model's own errors name its fields; a nested one's do not.
+                    own = isinstance(exc, ValidationError) and exc.title == self.model.__name__
+                    if own and (
                         rejected := chosen
                         & {error["loc"][0] for error in exc.errors() if error["loc"]}
                     ):
@@ -274,13 +345,11 @@ class ModelFiller[T]:
         raise GenerationExhausted(message) from last_error
 
     def _construct(self, inputs: dict[str, Any], candidate: dict[str, Any]) -> T:
-        """Run the original constructor; a changed or noncanonical result is a rejection."""
-        instance = self._compiled.adapter.construct({**inputs, **candidate})
+        """Run the original constructors; a changed or noncanonical result is a rejection."""
+        instance = self._assemble({**inputs, **candidate})
         domains = self._compiled.domains
         invalid = [
-            name
-            for name, domain in domains.items()
-            if not domain.accepts(getattr(instance, name, MISSING))
+            name for name, domain in domains.items() if not domain.accepts(_get(instance, name))
         ]
         # Fixed values of solved fields keep their exact type and value. Other fields go
         # through Pydantic as usual, which may convert them (5 to 5.0, a dict to a model).
@@ -288,10 +357,7 @@ class ModelFiller[T]:
             name
             for name, value in inputs.items()
             if name in domains
-            and (
-                type(getattr(instance, name, MISSING)) is not type(value)
-                or getattr(instance, name, MISSING) != value
-            )
+            and (type(_get(instance, name)) is not type(value) or _get(instance, name) != value)
         ]
         if isinstance(instance, self.model) and not invalid and not changed:
             return instance
@@ -309,8 +375,40 @@ class ModelFiller[T]:
             options = [option for option in get_args(field.annotation) if option is not type(None)]
         return self.providers.get(options[0]) if len(options) == 1 else None
 
-    def _fill_nested(self, name: str, model: type, fixed: dict[str, Any]) -> Any:
-        """A nested model's canonical completion, with this filler's options and providers."""
+    def _assemble(self, values: dict[str, Any]) -> Any:
+        """Build each solved nested model from its fields' values, then this model."""
+        local = {name: value for name, value in values.items() if "." not in name}
+        for name, model in self._compiled.nested:
+            if name not in local:  # A given nested instance is used as it is.
+                prefix = f"{name}."
+                inner = {
+                    key.removeprefix(prefix): value
+                    for key, value in values.items()
+                    if key.startswith(prefix)
+                }
+                local[name] = self._nested_filler(name, model)._assemble(inner)
+        return self._compiled.adapter.construct(local)
+
+    def _nested_inputs(self, name: str, model: type, given: Any) -> dict[str, Any]:
+        """A solved nested model's inputs by path, such as "customer.age".
+
+        A dict fixes some of its fields, as in any fill. A given instance is used as it
+        is, and its solved values become fixed, so this model's rules see them.
+        """
+        filler = self._nested_filler(name, model)
+        if given is MISSING or isinstance(given, dict):
+            fixed = {} if given is MISSING else given
+            filler._compiled.adapter.check_fixed(fixed)
+            inner, _ = filler._inputs(fixed)
+            return {f"{name}.{key}": value for key, value in inner.items()}
+        values = {path: _get(given, path) for path in filler._compiled.domains}
+        for path, value in values.items():
+            if not filler._compiled.domains[path].accepts(value):
+                raise TypeError(f"{name}.{path} of the given {model.__name__} is {value!r}")
+        return {name: given} | {f"{name}.{path}": value for path, value in values.items()}
+
+    def _nested_filler(self, name: str, model: type) -> ModelFiller[Any]:
+        """The filler of a nested model field, with this filler's options and providers."""
         if name not in self._nested:
             if model in (*self._outer, self.model):
                 raise UnsupportedConstraint(
@@ -332,41 +430,56 @@ class ModelFiller[T]:
             )
             nested._outer = (*self._outer, self.model)
             self._nested[name] = nested
+        return self._nested[name]
+
+    def _fill_nested(self, name: str, model: type, fixed: dict[str, Any]) -> Any:
+        """The canonical completion of a nested model completed on its own."""
         try:
-            return self._nested[name].fill(**fixed)
+            return self._nested_filler(name, model).fill(**fixed)
         except ModelFillError as error:
             raise type(error)(f"{name}: {error}") from error
 
     def _inputs(self, fixed_fields: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
-        """Constructor inputs besides the solved fields, and the input names modelfill chose.
+        """Constructor inputs besides the solver's candidate, and the input names chosen.
 
-        For each field the solver does not model: the caller's value, with a dict for a
-        nested model completed; else a provider; else the model's default; else a nested
-        model's canonical completion or a boring value.
+        Fixed solved values come first, a solved nested model's by path. For each field
+        the solver does not model: the caller's value, with a dict for a nested model
+        completed; else a provider; else the model's default; else a nested model's
+        canonical completion or a boring value.
         """
-        inputs, chosen, missing = dict(fixed_fields), set(), []
+        inputs: dict[str, Any] = {}
+        chosen, missing, solved_nested = set(), [], dict(self._compiled.nested)
         for field in self._compiled.adapter.fields:
+            name, given = field.name, fixed_fields.get(field.name, MISSING)
             if field.domain is not None:
+                if given is not MISSING:
+                    inputs[name] = given
+                continue
+            provider = self._provider(field) if given is MISSING else None
+            if name in solved_nested:  # Its fields join this solver.
+                try:
+                    given = provider() if provider is not None else given
+                    inputs.update(self._nested_inputs(name, solved_nested[name], given))
+                except ModelFillError as error:
+                    raise type(error)(f"{name}: {error}") from error
                 continue
             nested = nested_model(field.annotation)
-            if field.name in fixed_fields:
-                value = fixed_fields[field.name]
-                if nested is not None and isinstance(value, dict):
-                    inputs[field.name] = self._fill_nested(field.name, nested, value)
+            if given is not MISSING:
+                completed = nested is not None and isinstance(given, dict)
+                inputs[name] = self._fill_nested(name, nested, given) if completed else given
                 continue
-            provider = self._provider(field)
             if provider is not None:
-                inputs[field.name] = provider()
+                inputs[name] = provider()
             elif not field.required:
                 continue  # The model's own default applies.
             elif nested is not None and nested is field.annotation:
-                inputs[field.name] = self._fill_nested(field.name, nested, {})
+                inputs[name] = self._fill_nested(name, nested, {})
             elif (value := boring(field.annotation, field.metadata)) is not MISSING:
-                inputs[field.name] = value
+                inputs[name] = value
             else:
-                missing.append(field.name)
+                missing.append(name)
                 continue
-            chosen.add(field.input_name or field.name)
+            chosen.add(field.input_name or name)
         if missing:
             raise UnsupportedConstraint(
                 f"modelfill cannot generate {', '.join(missing)}; pass values or add providers"
@@ -402,7 +515,10 @@ class ModelFiller[T]:
         return {
             "model": self.model.__qualname__,
             "mode": self.mode,
-            "fields": {field.name: self._describe(field) for field in compiled.adapter.fields},
+            "fields": {  # Solved nested fields appear by path, such as "customer.age".
+                **{field.name: self._describe(field) for field in compiled.adapter.fields},
+                **{name: self._describe(field) for name, field in compiled.solved if "." in name},
+            },
             "validators": [
                 {
                     "name": name,

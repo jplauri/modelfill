@@ -173,7 +173,10 @@ class _Analyzer:
             raise self.unsupported(function, "validator parameters cannot be reassigned")
         self.local_names = set(names) | assigned
         if self.kind == "field":
-            if self.field_name not in self.fields:
+            target = self.field_name or ""
+            if target not in self.fields and not any(
+                f.startswith(f"{target}.") for f in self.fields
+            ):
                 raise self.unsupported(function, "field validator has no known target field")
             bound_class = inspect.ismethod(self.function) and isinstance(
                 self.function.__self__, type
@@ -325,6 +328,8 @@ class _Analyzer:
             return self.constant(syntax.value, syntax)
         if isinstance(syntax, ast.Name):
             if syntax.id == self.value_name and self.field_name is not None:
+                if self.field_name not in self.fields:
+                    raise self.unsupported(syntax, "a nested model is read only through its fields")
                 return var(self.field_name, self.fields[self.field_name])
             if syntax.id in self.bound:
                 return self.bound[syntax.id]
@@ -334,9 +339,10 @@ class _Analyzer:
                 return self.constant(value, syntax)
             raise self.unsupported(syntax, "names must be fields, assigned locals or constants")
         if isinstance(syntax, ast.Attribute):
+            path = self.field_path(syntax)
+            if path in self.fields:
+                return var(path, self.fields[path])
             if isinstance(syntax.value, ast.Name):
-                if syntax.value.id == self.receiver and syntax.attr in self.fields:
-                    return var(syntax.attr, self.fields[syntax.attr])
                 enum_type = self.resolve(syntax.value.id)
                 if isinstance(enum_type, type) and issubclass(enum_type, Enum):
                     if not plain_enum(enum_type):
@@ -448,6 +454,18 @@ class _Analyzer:
             elif any(function is type_ for type_ in TIME_TYPES.values()):
                 return self.time_constant(function, syntax)
         raise self.unsupported(syntax, f"unsupported expression {type(syntax).__name__}")
+
+    def field_path(self, syntax: ast.expr) -> str:
+        """The field an attribute chain reads: self.customer.age reads "customer.age"."""
+        names = []
+        while isinstance(syntax, ast.Attribute):
+            names.append(syntax.attr)
+            syntax = syntax.value
+        if isinstance(syntax, ast.Name) and syntax.id == self.receiver:
+            return ".".join(reversed(names))
+        if isinstance(syntax, ast.Name) and syntax.id == self.value_name and self.field_name:
+            return ".".join([self.field_name, *reversed(names)])  # A nested field's value.
+        return ""
 
     def link(
         self, left: Expr, operation: ast.cmpop, right_syntax: ast.expr, syntax: ast.Compare

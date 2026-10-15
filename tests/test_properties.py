@@ -134,48 +134,60 @@ def test_canonical_meetings_are_stable_and_impossibility_is_real(partial):
     assert ModelFiller(Meeting).batch(1, **partial) == [meeting]
 
 
-# Random validators over two integer fields, within the supported grammar.
-ATOMS = st.sampled_from(["self.a", "self.b"]) | st.integers(-4, 4).map(str)
-TERMS = st.recursive(
-    ATOMS,
-    lambda inner: st.one_of(
-        st.tuples(inner, st.sampled_from(["+", "-"]), inner).map(
-            lambda t: f"({t[0]} {t[1]} {t[2]})"
+# Random validators over two integer reads, within the supported grammar.
+def validators(first: str, second: str) -> st.SearchStrategy[list[str]]:
+    atoms = st.sampled_from([first, second]) | st.integers(-4, 4).map(str)
+    terms = st.recursive(
+        atoms,
+        lambda inner: st.one_of(
+            st.tuples(inner, st.sampled_from(["+", "-"]), inner).map(
+                lambda t: f"({t[0]} {t[1]} {t[2]})"
+            ),
+            st.tuples(st.integers(-3, 3), inner).map(lambda t: f"({t[0]} * {t[1]})"),
+            st.tuples(inner, st.sampled_from(["%", "//"]), st.integers(1, 4)).map(
+                lambda t: f"({t[0]} {t[1]} {t[2]})"
+            ),
+            inner.map(lambda term: f"(-{term})"),
         ),
-        st.tuples(st.integers(-3, 3), inner).map(lambda t: f"({t[0]} * {t[1]})"),
-        st.tuples(inner, st.sampled_from(["%", "//"]), st.integers(1, 4)).map(
-            lambda t: f"({t[0]} {t[1]} {t[2]})"
+        max_leaves=4,
+    )
+    operators = st.sampled_from(["==", "!=", "<", "<=", ">", ">="])
+    conditions = st.recursive(
+        st.one_of(
+            terms,  # Tested for truth.
+            st.tuples(terms, operators, terms).map(" ".join),
+            st.tuples(terms, operators, terms, operators, terms).map(" ".join),  # Chained.
         ),
-        inner.map(lambda term: f"(-{term})"),
-    ),
-    max_leaves=4,
-)
-OPERATORS = st.sampled_from(["==", "!=", "<", "<=", ">", ">="])
-CONDITIONS = st.recursive(
-    st.one_of(
-        TERMS,  # Tested for truth.
-        st.tuples(TERMS, OPERATORS, TERMS).map(" ".join),
-        st.tuples(TERMS, OPERATORS, TERMS, OPERATORS, TERMS).map(" ".join),  # Chained.
-    ),
-    lambda inner: st.one_of(
-        inner.map(lambda condition: f"not ({condition})"),
-        st.tuples(inner, st.sampled_from(["and", "or"]), inner).map(
-            lambda t: f"({t[0]}) {t[1]} ({t[2]})"
+        lambda inner: st.one_of(
+            inner.map(lambda condition: f"not ({condition})"),
+            st.tuples(inner, st.sampled_from(["and", "or"]), inner).map(
+                lambda t: f"({t[0]}) {t[1]} ({t[2]})"
+            ),
         ),
+        max_leaves=3,
+    )
+    statements = st.one_of(
+        conditions.map(lambda c: f"    if {c}:\n        raise ValueError('rejected')"),
+        conditions.map(lambda c: f"    if {c}:\n        return self"),
+        conditions.map(lambda c: f"    assert {c}"),
+        st.tuples(conditions, conditions).map(
+            lambda t: (
+                f"    if {t[0]}:\n        if {t[1]}:\n            raise ValueError('rejected')\n"
+                f"    elif {t[1]}:\n        return self"
+            )
+        ),
+    )
+    return st.lists(statements, min_size=1, max_size=3)
+
+
+SHAPES = {  # The two reads, the solver fields they become, and an object Python validates.
+    "flat": (validators("self.a", "self.b"), ("a", "b"), lambda a, b: SimpleNamespace(a=a, b=b)),
+    "nested": (
+        validators("self.inner.a", "self.b"),
+        ("inner.a", "b"),
+        lambda a, b: SimpleNamespace(inner=SimpleNamespace(a=a), b=b),
     ),
-    max_leaves=3,
-)
-STATEMENTS = st.one_of(
-    CONDITIONS.map(lambda c: f"    if {c}:\n        raise ValueError('rejected')"),
-    CONDITIONS.map(lambda c: f"    if {c}:\n        return self"),
-    CONDITIONS.map(lambda c: f"    assert {c}"),
-    st.tuples(CONDITIONS, CONDITIONS).map(
-        lambda t: (
-            f"    if {t[0]}:\n        if {t[1]}:\n            raise ValueError('rejected')\n"
-            f"    elif {t[1]}:\n        return self"
-        )
-    ),
-)
+}
 NAMES = itertools.count()
 
 
@@ -188,10 +200,13 @@ def define(source):
     return namespace["check"]
 
 
-@given(st.lists(STATEMENTS, min_size=1, max_size=3))
-def test_generated_validators_are_extracted_exactly_or_refused(statements):
+@pytest.mark.parametrize("shape", SHAPES)
+@given(data=st.data())
+def test_generated_validators_are_extracted_exactly_or_refused(shape, data):
+    strategy, names, build = SHAPES[shape]
+    statements = data.draw(strategy)
     validator = define("def check(self):\n" + "\n".join(statements) + "\n    return self\n")
-    fields = {"a": INT, "b": INT}
+    fields = dict.fromkeys(names, INT)
     try:
         expression = extract_validator(validator, fields)
     except UnsupportedConstraint:
@@ -199,9 +214,9 @@ def test_generated_validators_are_extracted_exactly_or_refused(statements):
     solver = Solver(fields, (expression,), timeout_ms=1000, work_limit=10**6)
     for a, b in itertools.product(range(-5, 6), repeat=2):
         try:
-            validator(SimpleNamespace(a=a, b=b))
+            validator(build(a, b))
             accepted = True
         except (ValueError, AssertionError):
             accepted = False
-        with solver.session({"a": a, "b": b}):
+        with solver.session(dict(zip(names, (a, b), strict=True))):
             assert solver.check() is accepted, (statements, a, b)
