@@ -23,10 +23,10 @@ def main() -> None:
     assert fill(Meeting, end=18, duration=4).start == 14
     assert fill(Meeting, start=10, end=13).duration == 3
     assert fill(Meeting, start=10, duration=2).end == 12
-    print(fill(Meeting))
+    print(fill(Meeting))  # Canonical: the boring valid meeting, the same every time.
 
-    filler = ModelFiller(Meeting, mode="strict", seed=42)
-    print(filler.batch(5))
+    filler = ModelFiller(Meeting, mode="strict")
+    print(filler.batch(5))  # Five distinct meetings, in canonical order.
     print(filler.explain())
     try:
         fill(Meeting, start=17, duration=4)

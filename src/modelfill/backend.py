@@ -5,7 +5,7 @@ from __future__ import annotations
 import operator
 import random
 import re
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime
 from enum import Enum
@@ -13,12 +13,12 @@ from typing import Any
 
 import z3
 
-from .errors import SolverTimeout, SolverUnknown, UnsupportedConstraint
+from .errors import GenerationExhausted, SolverTimeout, SolverUnknown, UnsupportedConstraint
 from .ir import BOUNDS, DAY, Domain, Expr, decode, encodable, encode
 
-# Kinds Z3 sees as integers, with random-target parameters (anchor, step, spread).
-# Fields with a finite feasible range sample inside it and often at its edges;
-# others near the reference model, or anywhere within anchor ± spread steps.
+# Kinds Z3 sees as integers: (anchor, step, spread). Canonical values sit as close to
+# the anchor as the rules allow. The exploration sampler targets a finite feasible
+# range's inside and edges; otherwise steps from the reference model or the anchor.
 _INTEGERS = {
     "int": (0, 1, 100),
     "date": (encode(date(2025, 1, 1)), 1, 365),
@@ -31,6 +31,14 @@ def _show(value: Any) -> str:
     return f"{type(value).__name__}.{value.name}" if isinstance(value, Enum) else repr(value)
 
 
+def _strings(exprs: Iterable[Expr]) -> Generator[str]:
+    """String constants in rule order: readable candidates for string fields."""
+    for expr in exprs:
+        if expr.op == "const" and type(expr.value) is str:
+            yield expr.value
+        yield from _strings(expr.args)
+
+
 class Solver:
     """Incremental solving over immutable IR; never shared between threads."""
 
@@ -40,26 +48,29 @@ class Solver:
         constraints: Sequence[Expr],
         *,
         timeout_ms: int,
-        seed: int | None,
+        work_limit: int,
         guidance: Sequence[Expr] = (),
     ) -> None:
         self.domains = dict(domains)
         self.timeout_ms = timeout_ms
+        self.work_limit = work_limit
         self.context = z3.Context()
         self.engine = z3.Solver(ctx=self.context)
-        self.engine.set(timeout=timeout_ms)
-        self.rng = random.Random(seed)
-        # Keep Z3's own search deterministic; vary preferences in Python instead.
-        self.engine.set(random_seed=0)
+        # Z3's resource limit (rlimit) counts work, not time, so it decides the same way
+        # on any machine; the timeout is only a safety net. Z3's own search stays
+        # deterministic too; exploration varies its preferences in Python instead.
+        self.engine.set(rlimit=work_limit, timeout=timeout_ms, random_seed=0)
+        # Solver names are internal (v0, n0, ...), so no field name, such as "part0" or
+        # "a is None", can collide with another field's symbol or with explanation trackers.
         self.variables = {
             name: {"bool": z3.Bool, "str": z3.String}.get(domain.kind, z3.Int)(
-                name, ctx=self.context
+                f"v{index}", ctx=self.context
             )
-            for name, domain in domains.items()
+            for index, (name, domain) in enumerate(domains.items())
         }
         self.flags = {
-            name: z3.Bool(f"{name} is None", ctx=self.context)
-            for name, domain in domains.items()
+            name: z3.Bool(f"n{index}", ctx=self.context)
+            for index, (name, domain) in enumerate(domains.items())
             if domain.nullable
         }
         # What each field's type allows, labeled so that contradictions can cite it.
@@ -80,6 +91,7 @@ class Solver:
         self.engine.add(*(fact for _, fact in self.facts))
         self.engine.add(*(self.translate(expr) for expr in constraints))
         self.guidance = [self.translate(expr) for expr in guidance]
+        self.strings = list(dict.fromkeys(_strings([*constraints, *guidance])))
         self.ranges_key: frozenset[tuple[str, Any]] | None = None
         self.ranges: dict[str, tuple[int | None, int | None]] = {}
 
@@ -171,8 +183,10 @@ class Solver:
         if result == z3.unsat:
             return False
         reason = self.engine.reason_unknown()
-        if "timeout" in reason.lower() or "canceled" in reason.lower():
-            raise SolverTimeout(f"Z3 could not finish: {reason}")
+        # Z3 reports an exhausted work limit as "canceled" or "max. resource limit
+        # exceeded"; some older releases only say "unknown" (a plain SolverUnknown).
+        if any(word in reason.lower() for word in ("timeout", "canceled", "resource limit")):
+            raise SolverTimeout(f"Z3 exhausted its budget: {reason}")
         raise SolverUnknown(f"Z3 could not decide: {reason}")
 
     def conflict(
@@ -180,20 +194,136 @@ class Solver:
     ) -> tuple[list[str], list[str]]:
         """A small set of fixed inputs and rules that admit no solution (an unsat core)."""
         explainer = z3.Solver(ctx=self.context)
-        explainer.set(timeout=self.timeout_ms)
+        explainer.set(rlimit=self.work_limit, timeout=self.timeout_ms)
         explainer.set("core.minimize", True)
         inputs = [
             (f"{name}={_show(value)}", self.equal(name, value)) for name, value in fixed.items()
         ]
         parts = inputs + self.facts + [(label, self.translate(expr)) for label, expr in rules]
         for index, (_, constraint) in enumerate(parts):
-            explainer.assert_and_track(constraint, z3.Bool(f"part{index}", self.context))
+            explainer.assert_and_track(constraint, z3.Bool(f"t{index}", self.context))
         if explainer.check() != z3.unsat:
             return [], []
         core = {str(literal) for literal in explainer.unsat_core()}
-        cited = [index for index in range(len(parts)) if f"part{index}" in core]
+        cited = [index for index in range(len(parts)) if f"t{index}" in core]
         given = [parts[index][0] for index in cited if index < len(inputs)]
         return given, [parts[index][0] for index in cited if index >= len(inputs)]
+
+    # Canonical completion: every choice is the unique best value under a fixed rule,
+    # so it never depends on which model Z3 happens to return.
+
+    def fits(self, constraint: Any) -> bool:
+        """Whether a constraint is satisfiable together with everything asserted."""
+        self.engine.push()
+        try:
+            self.engine.add(constraint)
+            return self.check()
+        finally:
+            self.engine.pop()
+
+    def witness(self, constraint: Any, term: Any) -> int | None:
+        """An integer term's value in some model of the constraint, or None if there is none."""
+        self.engine.push()
+        try:
+            self.engine.add(constraint)
+            if not self.check():
+                return None
+            return self.engine.model().eval(term, model_completion=True).as_long()
+        finally:
+            self.engine.pop()
+
+    def least(self, term: Any, lower: int, upper: int | None = None) -> int | None:
+        """An integer term's smallest feasible value above lower (and below upper)."""
+        window = term > lower if upper is None else z3.And(term > lower, term < upper)
+        best = self.witness(window, term)
+        if best is None:
+            return None
+        # Bisect between the values known infeasible and the best found. The first
+        # model often holds the minimum already, so probe just below it first.
+        low, probe = lower + 1, best - 1
+        while low <= probe:
+            found = self.witness(z3.And(window, term <= probe), term)
+            if found is None:
+                low = probe + 1
+            else:
+                best = found
+            probe = (low + best - 1) // 2
+        return best
+
+    def nearest(self, term: Any, anchor: int) -> int:
+        """An integer term's feasible value closest to anchor; a tie goes above it."""
+        if self.fits(term == anchor):
+            return anchor
+        above = self.least(term, anchor)
+        # A value below wins only if strictly closer: -term in (-anchor, above - 2 * anchor).
+        below = self.least(-term, -anchor, None if above is None else above - 2 * anchor)
+        if below is not None:
+            return -below
+        assert above is not None  # A satisfiable session has a value on some side.
+        return above
+
+    def texts(self, name: str, known: Sequence[str]) -> Generator[str]:
+        """Readable string candidates in canonical order, probing lengths only as needed."""
+        yield name
+        length = z3.Length(self.variables[name])
+        if self.fits(length == len(name) + 2):
+            yield from (f"{name}_{number}" for number in range(1, 10))
+        size = self.nearest(length, len(name))
+        base = (name + "_" * size)[:size]
+        yield base
+        yield from (base[:-1] + digit for digit in "123456789" if size)
+        yield from self.strings  # Strings the rules mention, then other fields' values.
+        yield from known
+
+    def text(self, name: str, known: Sequence[str]) -> str:
+        """The first readable candidate the rules allow; never Z3's own string choice."""
+        tried = set()
+        for value in self.texts(name, known):
+            if value not in tried and encodable(value) and self.fits(self.equal(name, value)):
+                return value
+            tried.add(value)
+        raise GenerationExhausted(f"No readable canonical string for {name!r}")
+
+    def resolve(self, name: str, known: Sequence[str]) -> Any:
+        """A free field's canonical value, given everything pinned so far."""
+        domain = self.domains[name]
+        if domain.nullable and self.fits(self.flags[name]):
+            return None
+        if domain.choices is not None:
+            return next(value for value in domain.choices if self.fits(self.equal(name, value)))
+        if domain.kind == "bool":
+            return not self.fits(self.equal(name, False))
+        if domain.kind in _INTEGERS:
+            anchor = _INTEGERS[domain.kind][0]
+            return decode(domain.kind, self.nearest(self.variables[name], anchor))
+        return self.text(name, known)
+
+    def canonical(
+        self, fixed: Mapping[str, Any], defaults: Mapping[str, Any], *, guided: bool = False
+    ) -> dict[str, Any]:
+        """The free fields' canonical values: guidance and defaults where they fit, then
+        each remaining field in declaration order, pinned before the next is chosen."""
+        self.engine.push()
+        try:
+            for predicate in self.guidance if guided else ():
+                if self.fits(predicate):
+                    self.engine.add(predicate)
+            values: dict[str, Any] = {}
+            for name, value in defaults.items():
+                if self.fits(self.equal(name, value)):
+                    values[name] = value
+                    self.engine.add(self.equal(name, value))
+            for name in self.domains:
+                if name not in fixed and name not in values:
+                    pinned = {**fixed, **values}
+                    known = [pinned[n] for n in self.domains if type(pinned.get(n)) is str]
+                    values[name] = self.resolve(name, known)
+                    self.engine.add(self.equal(name, values[name]))
+            return values
+        finally:
+            self.engine.pop()
+
+    # Exploration: the edge-biased random sampler, reachable only through modelfill.hypothesis.
 
     def feasible_ranges(
         self, names: Sequence[str], *assumptions: Any
@@ -225,28 +355,28 @@ class Solver:
             ranges[name] = (low, high)
         return ranges
 
-    def integer_target(self, name: str, reference: Any) -> Any:
+    def integer_target(self, name: str, reference: Any, rng: random.Random) -> Any:
         """A random target for an integer-encoded field: an edge, a value in range, or nearby."""
         kind = self.domains[name].kind
         anchor, step, spread = _INTEGERS[kind]
         low, high = self.ranges.get(name, (None, None))
-        roll = self.rng.random()
+        roll = rng.random()
         if low is not None and roll < 0.1:
             target = low
         elif high is not None and roll < 0.2:
             target = high
         elif low is not None and high is not None:
-            target = self.rng.randint(low, high)
+            target = rng.randint(low, high)
         elif low is not None:
-            target = low + step * self.rng.randint(0, spread)
+            target = low + step * rng.randint(0, spread)
         elif high is not None:
-            target = high - step * self.rng.randint(0, spread)
+            target = high - step * rng.randint(0, spread)
         else:
             near = anchor if reference is None else encode(reference)
-            target = self.rng.choice(
+            target = rng.choice(
                 [
-                    near + step * self.rng.randint(-10, 10),
-                    anchor + step * self.rng.randint(-spread, spread),
+                    near + step * rng.randint(-10, 10),
+                    anchor + step * rng.randint(-spread, spread),
                 ]
             )
         if kind in BOUNDS:  # Stay within what Python can represent.
@@ -281,21 +411,21 @@ class Solver:
 
     def prefer(self, constraint: Any) -> None:
         """Add a preference only after checking it; never a source of UNSAT."""
-        self.engine.push()
         try:
-            self.engine.add(constraint)
-            accepted = self.check()
+            if self.fits(constraint):
+                self.engine.add(constraint)
         except SolverUnknown:
-            accepted = False
-        finally:
-            self.engine.pop()
-        if accepted:
-            self.engine.add(constraint)
+            pass  # Exploration skips an undecided preference.
 
     def candidate(
-        self, fixed: Mapping[str, Any], defaults: Mapping[str, Any], *, guided: bool = False
+        self,
+        fixed: Mapping[str, Any],
+        defaults: Mapping[str, Any],
+        rng: random.Random,
+        *,
+        guided: bool = False,
     ) -> dict[str, Any]:
-        """Sample soft preferences, then read an exact satisfying assignment."""
+        """Sample soft random preferences, then read an exact satisfying assignment."""
         key = frozenset(fixed.items())
         if key != self.ranges_key:  # Ranges depend only on hard constraints and fixed inputs.
             free = [
@@ -313,11 +443,9 @@ class Solver:
             for predicate in self.guidance if guided else ():
                 self.prefer(predicate)
             for name, value in defaults.items():
-                # A default the solver cannot represent is simply not preferred.
-                if name not in fixed and self.domains[name].accepts(value) and encodable(value):
-                    self.prefer(self.equal(name, value))
+                self.prefer(self.equal(name, value))
             names = [name for name in self.domains if name not in fixed and name not in defaults]
-            self.rng.shuffle(names)
+            rng.shuffle(names)
             # Obtain a feasible reference before choosing soft random targets.
             if not self.check():
                 raise RuntimeError("A checked preference unexpectedly became unsatisfiable")
@@ -325,18 +453,18 @@ class Solver:
             for name in names:
                 domain = self.domains[name]
                 reference = base[name]
-                if domain.nullable and self.rng.random() < 0.25:
+                if domain.nullable and rng.random() < 0.25:
                     target = None
                 elif domain.choices is not None:
-                    target = self.rng.choice(domain.choices)
+                    target = rng.choice(domain.choices)
                 elif domain.kind == "bool":
-                    target = bool(self.rng.getrandbits(1))
+                    target = bool(rng.getrandbits(1))
                 elif domain.kind in _INTEGERS:
-                    target = self.integer_target(name, reference)
+                    target = self.integer_target(name, reference, rng)
                 else:
-                    length = min(len(reference or ""), 64) + self.rng.randint(0, 8)
+                    length = min(len(reference or ""), 64) + rng.randint(0, 8)
                     target = "".join(
-                        self.rng.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(length)
+                        rng.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(length)
                     )
                 self.prefer(self.equal(name, target))
             if not self.check():
@@ -346,5 +474,5 @@ class Solver:
             self.engine.pop()
 
     def block(self, values: Mapping[str, Any]) -> None:
-        """Exclude a failed candidate within the current fill session only."""
+        """Exclude a tried candidate (rejected, or already in a batch) for this session."""
         self.engine.add(self.disjunction([z3.Not(self.equal(k, v)) for k, v in values.items()]))

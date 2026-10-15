@@ -22,4 +22,4 @@ class SolverUnknown(ModelFillError):
 
 
 class SolverTimeout(SolverUnknown):
-    """The solver exhausted its time budget."""
+    """The solver exhausted its budget: its work limit or the wall-clock safety net."""

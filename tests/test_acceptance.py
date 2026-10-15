@@ -6,15 +6,17 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from itertools import product
-from typing import ClassVar, Literal
+from typing import Annotated, ClassVar, Literal, get_args
 from uuid import UUID, uuid4
 
 import pytest
+from annotated_types import Ge, Gt, Le, Lt, MaxLen, MinLen, MultipleOf
 from pydantic import (
     BaseModel,
     Field,
     ValidationError,
     ValidationInfo,
+    create_model,
     field_validator,
     model_validator,
 )
@@ -43,7 +45,7 @@ def test_bidirectional_completion(fixed, expected):
 
 
 def test_unconstrained_completion_and_reusable_filler():
-    filler = ModelFiller(Meeting, mode="strict", seed=12)
+    filler = ModelFiller(Meeting, mode="strict")
     for meeting in [fill(Meeting), *filler.batch(15)]:
         assert meeting.end == meeting.start + meeting.duration
         assert Meeting.model_validate(meeting.model_dump()) == meeting
@@ -70,9 +72,9 @@ class Pair(BaseModel):
 
 
 def test_conditional_membership():
-    filler = ModelFiller(Pair, mode="strict", seed=8)
-    assert fill(Pair, a=1).b in (2, 4)
-    assert all(pair.a == 1 and pair.b in (2, 4) for pair in filler.batch(12, a=1))
+    filler = ModelFiller(Pair, mode="strict")
+    assert fill(Pair, a=1).b == 2
+    assert [pair.b for pair in filler.batch(2, a=1)] == [2, 4]
 
 
 class Coupled(BaseModel):
@@ -137,6 +139,51 @@ def test_dataclass_relationship_and_default():
         fill(DataclassMeeting, start=17, duration=4)
 
 
+@dataclass
+class HookedParent:
+    x: int
+
+    def __post_init__(self):
+        if self.x < 0:
+            raise ValueError("negative")
+
+
+@dataclass
+class PlainParent:
+    x: int
+
+
+class UndecoratedHook(PlainParent):  # PlainParent's generated __init__ never calls this.
+    def __post_init__(self):
+        if self.x < 0:
+            raise ValueError("never runs")
+
+
+class UndecoratedOverride(HookedParent):  # The inherited __init__ calls this override.
+    def __post_init__(self):
+        if self.x > 0:
+            raise ValueError("positive")
+
+
+@dataclass
+class DecoratedInherited(HookedParent):  # Generated again, so it calls the inherited hook.
+    pass
+
+
+@pytest.mark.parametrize(
+    "model", [HookedParent, UndecoratedHook, UndecoratedOverride, DecoratedInherited]
+)
+def test_dataclass_hooks_count_only_when_the_initializer_calls_them(model):
+    for x in (-1, 0, 1):
+        try:
+            expected = model(x=x)
+        except ValueError:
+            with pytest.raises(UnsatisfiableConstraints):
+                fill(model, x=x)
+        else:
+            assert fill(model, x=x) == expected
+
+
 class CallValidator(BaseModel):
     value: int = Field(ge=0, le=10)
 
@@ -153,10 +200,11 @@ def test_unsupported_validator_strict():
 
 
 def test_fallback_disclosed_and_original_validation_runs():
-    filler = ModelFiller(CallValidator, mode="auto", seed=31)
+    filler = ModelFiller(CallValidator, mode="auto")
     assert filler.explain()["unsupported"]
-    for value in filler.batch(12):
-        assert value.value % 2 == 0
+    values = filler.batch(6)  # Odd candidates are rejected by validation and blocked.
+    assert [value.value for value in values] == [0, 2, 4, 6, 8, 10]
+    for value in values:
         assert CallValidator.model_validate(value.model_dump()) == value
 
 
@@ -183,7 +231,7 @@ class GuidedFallback(BaseModel):
 
 
 def test_supported_validators_guide_fallback_search():
-    filler = ModelFiller(GuidedFallback, seed=1)
+    filler = ModelFiller(GuidedFallback)
     statuses = {item["name"]: item["status"] for item in filler.explain()["validators"]}
     assert statuses == {"relation": "guidance", "parity": "unsupported"}
     assert filler.fill(x=1000).y == 1005  # Far outside the random sampling window.
@@ -273,7 +321,7 @@ class BasicTypes(BaseModel):
 
 
 def test_basic_types_and_string_lengths():
-    filler = ModelFiller(BasicTypes, mode="strict", seed=1)
+    filler = ModelFiller(BasicTypes, mode="strict")
     for value in filler.batch(6, active=True, color=Color.RED):
         assert value.active is True
         assert value.color is Color.RED
@@ -303,15 +351,8 @@ def test_field_validator_earlier_field_reads():
         filler.fill(lower=20)
 
 
-def test_seed_reproducibility_and_variety():
-    first = ModelFiller(Meeting, seed=91).batch(20)
-    second = ModelFiller(Meeting, seed=91).batch(20)
-    assert first == second
-    assert len({tuple(value.model_dump().values()) for value in first}) > 1
-
-
 def test_shared_filler_thread_safety():
-    filler = ModelFiller(Meeting, seed=20)
+    filler = ModelFiller(Meeting)
     with ThreadPoolExecutor(max_workers=4) as executor:
         results = list(executor.map(lambda start: filler.fill(start=start), range(8, 17)))
     assert [result.start for result in results] == list(range(8, 17))
@@ -457,6 +498,44 @@ def test_fill_matches_original_constructor_exhaustively(model, grid):
             assert filler.fill(**inputs) == expected
 
 
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        Annotated[int, Ge(10), Ge(0)],
+        Annotated[int, Ge(0), Ge(10)],
+        Annotated[int, Gt(5), Ge(0)],
+        Annotated[int, Lt(3), Le(9)],
+        Annotated[int, MultipleOf(5), MultipleOf(2)],
+        Annotated[int, Ge(0), Le(9), Ge(5)],
+        Annotated[str, MinLen(10), MinLen(1)],
+        Annotated[str, MaxLen(1), MaxLen(5)],
+    ],
+)
+def test_repeated_metadata_combines_as_in_pydantic(annotation):
+    model = create_model("Repeated", value=(annotation, ...))
+    grid = range(-2, 13) if get_args(annotation)[0] is int else ["", "a", "abc", "abcdefghijk"]
+    filler = ModelFiller(model, mode="strict")
+    for value in grid:
+        try:
+            expected = model(value=value)
+        except ValidationError:
+            with pytest.raises(UnsatisfiableConstraints):
+                filler.fill(value=value)
+        else:
+            assert filler.fill(value=value) == expected
+
+
+NonNegativeInt = Annotated[int, Ge(0)]
+
+
+class Tightened(BaseModel):
+    cents: NonNegativeInt = Field(ge=10)  # Field() comes first, so the alias's ge=0 wins.
+
+
+def test_field_metadata_on_an_annotated_alias_combines_as_in_pydantic():
+    assert Tightened(cents=5).cents == fill(Tightened, cents=5).cents == 5
+
+
 class RestrictedEnum(BaseModel):
     color: Literal[Color.BLUE]
 
@@ -582,7 +661,7 @@ class Booking(BaseModel):
 
 
 def test_datetime_relationships_solve_in_both_directions():
-    filler = ModelFiller(Booking, mode="strict", seed=5)
+    filler = ModelFiller(Booking, mode="strict")
     six = datetime(2025, 3, 1, 18)
     assert filler.fill(end=six, length=timedelta(hours=2)).start == datetime(2025, 3, 1, 16)
     booking = filler.fill(start=six)
@@ -605,12 +684,13 @@ class Window(BaseModel):
 
 
 def test_optional_fields_take_none_or_satisfying_values():
-    filler = ModelFiller(Window, mode="strict", seed=3)
+    filler = ModelFiller(Window, mode="strict")
     assert filler.fill(opens=22, closes=None).closes is None
-    assert filler.fill(opens=22).closes in (None, 23)
+    assert filler.fill(opens=22).closes is None
+    assert filler.fill(opens=22, closes=23).closes == 23
     with pytest.raises(UnsatisfiableConstraints):
         filler.fill(opens=23, closes=5)
-    assert {window.closes is None for window in filler.batch(20)} == {True, False}
+    assert [window.closes for window in filler.batch(3)] == [None, 1, 2]
 
 
 class Ticket(BaseModel):
@@ -645,22 +725,10 @@ class Packs(BaseModel):
 
 
 def test_multiple_of_is_modeled():
-    filler = ModelFiller(Packs, mode="strict", seed=1)
-    assert {pack.size for pack in filler.batch(20)} <= {0, 5, 10, 15, 20}
+    filler = ModelFiller(Packs, mode="strict")
+    assert [pack.size for pack in filler.batch(5)] == [0, 5, 10, 15, 20]
     with pytest.raises(UnsatisfiableConstraints, match="size % 5 == 0"):
         filler.fill(size=7)
-
-
-class Wide(BaseModel):
-    amount: int = Field(ge=1000, le=1_000_000)
-    optional: int | None = Field(ge=1000, le=1_000_000)  # Required, so it is sampled.
-
-
-def test_sampling_spreads_over_the_feasible_range_and_its_edges():
-    wides = ModelFiller(Wide, seed=0).batch(100)
-    for values in ({wide.amount for wide in wides}, {wide.optional for wide in wides} - {None}):
-        assert {1000, 1_000_000} <= values
-        assert len(values) > 40
 
 
 class Invoice(BaseModel):
@@ -675,11 +743,11 @@ class Invoice(BaseModel):
 
 
 def test_date_fields_are_generated():
-    filler = ModelFiller(Invoice, mode="strict", seed=4)
+    filler = ModelFiller(Invoice, mode="strict")
     for invoice in filler.batch(10):
         assert type(invoice.due) is date
         assert 0 < (invoice.due - invoice.issued).days <= 30
-    assert filler.fill(due=date(2025, 1, 1)).issued < date(2025, 1, 1)
+    assert filler.fill(due=date(2025, 1, 1)).issued == date(2024, 12, 31)
 
 
 class Preferences(BaseModel):
@@ -694,8 +762,17 @@ class Preferences(BaseModel):
 
 
 def test_optional_literal_and_enum_fields_are_generated():
-    filler = ModelFiller(Preferences, mode="strict", seed=2)
+    filler = ModelFiller(Preferences, mode="strict")
     assert filler.fill(color=Color.RED).theme == "dark"
-    preferences = filler.batch(30)
-    assert {p.theme for p in preferences} == {"light", "dark", None}
-    assert {p.color for p in preferences} == {Color.RED, Color.BLUE, None}
+    # None first, then the declared choices; red needs the dark theme. 7 of 3 x 3 are valid.
+    assert [(p.theme, p.color) for p in filler.batch(7)] == [
+        (None, None),
+        (None, Color.BLUE),
+        ("light", None),
+        ("light", Color.BLUE),
+        ("dark", None),
+        ("dark", Color.RED),
+        ("dark", Color.BLUE),
+    ]
+    with pytest.raises(GenerationExhausted, match="found 7 of 8"):
+        filler.batch(8)

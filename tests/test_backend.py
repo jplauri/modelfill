@@ -1,8 +1,9 @@
+import random
 from typing import Literal
 
 import pytest
 import z3
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, create_model, model_validator
 
 from modelfill import (
     GenerationExhausted,
@@ -18,10 +19,16 @@ from modelfill.ir import INT, const, node, var
 
 
 @pytest.mark.parametrize(
-    ("reason", "expected"), [("timeout", SolverTimeout), ("incomplete theory", SolverUnknown)]
+    ("reason", "expected"),
+    [
+        ("timeout", SolverTimeout),
+        ("canceled", SolverTimeout),
+        ("max. resource limit exceeded", SolverTimeout),
+        ("incomplete theory", SolverUnknown),
+    ],
 )
 def test_unknown_is_never_unsat(monkeypatch, reason, expected):
-    solver = Solver({"x": INT}, (), timeout_ms=1000, seed=1)
+    solver = Solver({"x": INT}, (), timeout_ms=1000, work_limit=10**6)
     monkeypatch.setattr(solver.engine, "check", lambda: z3.unknown)
     monkeypatch.setattr(solver.engine, "reason_unknown", lambda: reason)
     with pytest.raises(expected, match=reason):
@@ -29,12 +36,26 @@ def test_unknown_is_never_unsat(monkeypatch, reason, expected):
 
 
 def test_session_is_restored_after_exception():
-    solver = Solver({"x": INT}, (), timeout_ms=1000, seed=1)
+    solver = Solver({"x": INT}, (), timeout_ms=1000, work_limit=10**6)
     with pytest.raises(ValueError), solver.session({"x": 3}):
         raise ValueError("interrupt")
     with solver.session({"x": 4}):
         assert solver.check()
         assert solver.values() == {"x": 4}
+
+
+def test_field_names_never_collide_with_solver_symbols():
+    # "a is None" once named the flag of the optional field a, making this impossible.
+    clash = create_model("Clash", a=(int | None, ...), **{"a is None": (bool, ...)})
+    values = {"a": None, "a is None": False}
+    assert fill(clash, **values) == clash(**values)
+
+    class Parts(BaseModel):  # part0 once named an explanation tracker.
+        part0: bool
+        x: int = Field(ge=10)
+
+    with pytest.raises(UnsatisfiableConstraints, match="x=5 conflict with x >= 10"):
+        fill(Parts, part0=False, x=5)
 
 
 def test_outside_z3_unicode_is_explicitly_unsupported():
@@ -76,12 +97,13 @@ def test_filler_reuses_solver_within_thread():
     assert filler.fill(y=9).x == 4
 
 
-def test_random_preferences_never_add_hard_bounds():
+def test_preferences_never_add_hard_bounds():
     x = var("x", INT)
-    solver = Solver({"x": INT}, [node("ge", x, const(10**100))], timeout_ms=1000, seed=2)
+    solver = Solver({"x": INT}, [node("ge", x, const(10**100))], timeout_ms=1000, work_limit=10**6)
     with solver.session({}):
         assert solver.check()
-        assert solver.candidate({}, {})["x"] >= 10**100
+        assert solver.canonical({}, {}) == {"x": 10**100}  # The value nearest 0.
+        assert solver.candidate({}, {}, random.Random(2))["x"] >= 10**100
 
 
 def test_exhaustion_after_candidate_blocking_is_not_proof():
@@ -115,7 +137,7 @@ def test_unknown_hook_demotes_other_validator_predicates():
                 raise ValueError("zero")
             return self
 
-    filler = ModelFiller(Transform, seed=1)
+    filler = ModelFiller(Transform)
     assert not filler.explain()["validator_constraints_active"]
     # A fixed input cannot be silently normalized by unknown transformation.
     with pytest.raises(GenerationExhausted):
@@ -148,7 +170,9 @@ def test_keyword_names_do_not_collide_with_api_options():
     assert ModelFiller(Keywords).batch(1, **values)[0].model_dump() == values
 
 
-@pytest.mark.parametrize("argument", [{"max_attempts": 0}, {"timeout_ms": 0}, {"mode": "random"}])
+@pytest.mark.parametrize(
+    "argument", [{"max_attempts": 0}, {"work_limit": 0}, {"timeout_ms": 0}, {"mode": "random"}]
+)
 def test_bad_options(argument):
     with pytest.raises(ValueError):
         ModelFiller(Relationship, **argument)

@@ -20,7 +20,7 @@ from modelfill.ir import BOOL, INT, STR, Domain, evaluate
 def assert_matches_python(validator, fields, grid):
     """Python, the extracted predicate and the solver agree on every input."""
     expression = extract_validator(validator, fields)
-    solver = Solver(fields, (expression,), timeout_ms=1000, seed=0)
+    solver = Solver(fields, (expression,), timeout_ms=1000, work_limit=10**6)
     for combination in itertools.product(*grid.values()):
         values = dict(zip(grid, combination, strict=True))
         try:

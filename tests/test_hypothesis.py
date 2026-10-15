@@ -1,13 +1,14 @@
 """The Hypothesis strategy: Hypothesis draws some fields, modelfill solves the rest."""
 
+import random
 from datetime import datetime, timedelta
 from uuid import UUID
 
 from hypothesis import find, given, settings
 from hypothesis import strategies as st
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
-from modelfill import ModelFiller
+from modelfill import ModelFiller, fill
 from modelfill.hypothesis import from_model
 
 
@@ -55,3 +56,22 @@ def test_shrinking_reaches_the_boundary_and_replays_identically():
 @given(from_model(ModelFiller(Shift, mode="strict", max_attempts=3), start=STARTS))
 def test_a_configured_filler_works_as_the_template(shift):
     assert shift.start < shift.end
+
+
+class Wide(BaseModel):
+    amount: int = Field(ge=1000, le=1_000_000)
+    optional: int | None = Field(ge=1000, le=1_000_000)  # Required, so it is explored.
+
+
+def test_exploration_finds_edges_that_canonical_values_never_take():
+    assert fill(Wide).model_dump() == {"amount": 1000, "optional": None}
+    found = find(from_model(Wide), lambda wide: wide.amount == 1_000_000, settings=REPLAYABLE)
+    assert found.amount == 1_000_000
+
+
+def test_exploration_spreads_over_the_feasible_range_and_its_edges():
+    filler, rng = ModelFiller(Wide), random.Random(0)  # The sampler behind from_model.
+    wides = [filler._complete({}, 1, rng)[0] for _ in range(100)]
+    for values in ({wide.amount for wide in wides}, {wide.optional for wide in wides} - {None}):
+        assert {1000, 1_000_000} <= values
+        assert len(values) > 40
