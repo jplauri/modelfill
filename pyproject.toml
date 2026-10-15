@@ -1,0 +1,48 @@
+[project]
+name = "modelfill"
+version = "0.1.0"
+description = "Complete Pydantic models and dataclasses from their existing constraints"
+readme = "README.md"
+authors = [{ name = "Juho Lauri" }]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.10.3,<3", "z3-solver>=4.13,<5"]
+keywords = ["pydantic", "dataclasses", "test data", "constraint solving", "z3", "hypothesis"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Framework :: Hypothesis",
+  "Framework :: Pydantic :: 2",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Testing",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/jplauri/modelfill"
+Issues = "https://github.com/jplauri/modelfill/issues"
+
+[project.optional-dependencies]
+hypothesis = ["hypothesis>=6.10.1,<7"]
+
+[dependency-groups]
+dev = ["pytest>=9,<10", "ruff==0.17.0", "ty==0.0.87", "hypothesis>=6.10.1,<7"]
+
+[build-system]
+requires = ["uv_build>=0.11.3,<0.12"]
+build-backend = "uv_build"
+
+[tool.pytest]
+testpaths = ["tests"]
+pythonpath = ["."]  # Tests import the documented examples.
+addopts = ["--import-mode=importlib"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

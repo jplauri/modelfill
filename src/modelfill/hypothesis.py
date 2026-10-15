@@ -1,0 +1,54 @@
+"""Hypothesis integration: Hypothesis draws the fields you choose, modelfill solves the rest.
+
+Requires the optional dependency: ``pip install "modelfill[hypothesis]"``.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+from hypothesis import reject
+from hypothesis import strategies as st
+
+from .errors import GenerationExhausted, UnsatisfiableConstraints
+from .filler import ModelFiller
+
+
+def from_model[T](
+    model: type[T] | ModelFiller[T], /, **fields: st.SearchStrategy[Any]
+) -> st.SearchStrategy[T]:
+    """A strategy for validated instances of a model.
+
+    Pass the model class, or a configured ``ModelFiller`` to set ``mode``,
+    ``max_attempts`` or ``timeout_ms``; keyword arguments are always field names,
+    mapped to strategies. Required fields that modelfill cannot generate default to
+    ``st.from_type`` of their annotation, and modelfill solves every other field.
+    Draws that make the rules impossible are rejected instead of failing, and each
+    example uses a fresh solver seeded from the draw, so Hypothesis can replay and
+    shrink it.
+    """
+    template = model if isinstance(model, ModelFiller) else ModelFiller(model)
+    strategies = {
+        field.name: st.from_type(field.annotation)
+        for field in template._compiled.adapter.fields
+        if field.domain is None and field.required
+    }
+    strategies.update(fields)
+
+    @st.composite
+    def instances(draw: Callable[[st.SearchStrategy[Any]], Any]) -> T:
+        fixed = {name: draw(strategy) for name, strategy in strategies.items()}
+        filler = ModelFiller(
+            template.model,
+            mode=template.mode,
+            seed=draw(st.integers(0, 2**32 - 1)),
+            max_attempts=template.max_attempts,
+            timeout_ms=template.timeout_ms,
+        )
+        try:
+            return filler.fill(**fixed)
+        except (UnsatisfiableConstraints, GenerationExhausted):
+            reject()
+
+    return instances()

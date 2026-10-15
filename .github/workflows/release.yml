@@ -1,0 +1,30 @@
+name: Release
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml  # The full matrix must pass on the released commit.
+  pypi:
+    needs: ci
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/modelfill
+    permissions:
+      contents: read
+      id-token: write  # Trusted Publishing: PyPI trusts this workflow; no token is stored.
+    steps:
+      # Pinned by commit, since this job can publish.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          enable-cache: false
+      - name: Tag matches the package version
+        run: test "${GITHUB_REF_NAME#v}" = "$(uv version --short)"
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2

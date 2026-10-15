@@ -1,0 +1,28 @@
+name: CI
+on: [push, pull_request, workflow_call]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+        pins: [""]
+        include:
+          # The declared minimums, extra included, layered over the locked environment.
+          - python: "3.12"
+            pins: "--with pydantic==2.10.3 --with z3-solver==4.13.0.0 --with hypothesis==6.10.1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0  # Publishes no moving major tag.
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run ty check src  # Tests deliberately include ill-typed models.
+      - run: uv run ${{ matrix.pins }} pytest
+      - run: uv build
+      # The wheel alone, in fresh environments without and with the extra.
+      - run: uv run --isolated --no-project --with dist/*.whl python examples/meeting.py
+      - run: uv run --isolated --no-project --with "$(ls dist/*.whl)[hypothesis]" --with pytest pytest tests/test_hypothesis.py
