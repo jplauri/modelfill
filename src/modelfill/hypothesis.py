@@ -5,6 +5,7 @@ Requires the optional dependency: ``pip install "modelfill[hypothesis]"``.
 
 from __future__ import annotations
 
+import random
 from collections.abc import Callable
 from typing import Any
 
@@ -21,12 +22,14 @@ def from_model[T](
     """A strategy for validated instances of a model.
 
     Pass the model class, or a configured ``ModelFiller`` to set ``mode``,
-    ``max_attempts`` or ``timeout_ms``; keyword arguments are always field names,
-    mapped to strategies. Required fields that modelfill cannot generate default to
-    ``st.from_type`` of their annotation, and modelfill solves every other field.
-    Draws that make the rules impossible are rejected instead of failing, and each
-    example uses a fresh solver seeded from the draw, so Hypothesis can replay and
-    shrink it.
+    ``max_attempts``, ``work_limit`` or ``timeout_ms``; keyword arguments are always
+    field names, mapped to strategies. Required fields that modelfill cannot generate
+    default to ``st.from_type`` of their annotation, and modelfill solves every other
+    field.
+    Unlike ``fill``, the solved fields are explored: random, often at the edges of
+    their feasible ranges. Draws that make the rules impossible are rejected instead
+    of failing, and each example uses a fresh solver seeded from the draw, so
+    Hypothesis can replay and shrink it.
     """
     template = model if isinstance(model, ModelFiller) else ModelFiller(model)
     strategies = {
@@ -42,12 +45,13 @@ def from_model[T](
         filler = ModelFiller(
             template.model,
             mode=template.mode,
-            seed=draw(st.integers(0, 2**32 - 1)),
             max_attempts=template.max_attempts,
+            work_limit=template.work_limit,
             timeout_ms=template.timeout_ms,
         )
+        rng = random.Random(draw(st.integers(0, 2**32 - 1)))
         try:
-            return filler.fill(**fixed)
+            return filler._complete(fixed, 1, rng)[0]
         except (UnsatisfiableConstraints, GenerationExhausted):
             reject()
 

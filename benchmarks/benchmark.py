@@ -1,8 +1,9 @@
 """Small local benchmark; run ``uv run python -m benchmarks.benchmark --count 100``.
 
-Reports medians of repeated runs. Cold includes compilation; warm uses an already
-compiled filler. Both include the original model's validation.
-No external benchmark or factory dependencies are required.
+Reports medians of repeated runs. Cold includes compilation and solving. Warm repeats
+a fill on a compiled filler, which reuses its canonical assignment; solve clears that
+cache first, as for fills whose fixed inputs keep changing. All include the original
+model's validation. No external benchmark or factory dependencies are required.
 """
 
 import argparse
@@ -31,19 +32,24 @@ def main() -> None:
     def cold():
         for index in range(args.count):
             model = type(f"ColdMeeting{index}", (Meeting,), {})
-            ModelFiller(model, seed=42).fill()
+            ModelFiller(model).fill()
 
-    filler = ModelFiller(Meeting, seed=42)
+    filler = ModelFiller(Meeting)
     filler.fill()
 
     def warm():
         for _ in range(args.count):
             filler.fill()
 
+    def solve():
+        for _ in range(args.count):
+            filler._local.cache.clear()  # Private: time resolution rather than the cache.
+            filler.fill()
+
     # timeit disables garbage collection while timing; setup=gc.enable keeps it on.
     timings = {
         name: median(timeit.repeat(run, setup=gc.enable, number=1, repeat=args.repeat))
-        for name, run in {"cold": cold, "warm": warm}.items()
+        for name, run in {"cold": cold, "warm": warm, "solve": solve}.items()
     }
     print(
         f"Python {platform.python_version()}, Pydantic {pydantic.__version__}, "

@@ -23,11 +23,12 @@ class and never uses `model_construct()` as validation.
    into exact integer arithmetic, bounded by the real `min`/`max` of each type.
    Fields of any other type are external: the solver never sees them.
 4. **Z3 backend:** compile IR into expressions, impose canonical fixed inputs,
-   ask for satisfying assignments and decode values. Generation preferences are
-   separate from the hard constraints used to establish impossibility.
-5. **Generation API:** manage reuse, random preferences and bounded retries;
-   construct and validate every candidate, preserve fixed inputs, and explain
-   unsupported logic and failures.
+   prove impossibility, and choose values: canonical ones by pinning each field
+   to its best allowed value, or explored ones from random preferences. Choices
+   are separate from the hard constraints used to establish impossibility.
+5. **Generation API:** manage reuse, cached canonical assignments and bounded
+   retries; construct and validate every candidate, preserve fixed inputs, and
+   explain unsupported logic and failures.
 
 ## Why control flow matters
 
@@ -71,9 +72,10 @@ patterns for optional fields exact rather than conservative.
 ## Guarantees and budgets
 
 `UnsatisfiableConstraints` means the sound modeled constraints and fixed
-assignments have no solution. The backend establishes this without random
-preferences, arbitrary sampling ranges or accumulated failed-candidate blocks.
-modelfill only makes this claim when all discovered model behavior is supported. If anything is unsupported, it demotes every extracted validator
+assignments have no solution. The backend establishes this without preferences,
+pinned values or accumulated failed-candidate blocks. modelfill only makes this
+claim when all discovered model behavior is supported. If anything is
+unsupported, it demotes every extracted validator
 predicate to soft guidance, keeps field constraints as candidate bounds, and
 never reports UNSAT. This accounts for an unknown hook potentially transforming
 a value before a supported validator runs. Guidance is preferred on alternate
@@ -91,9 +93,9 @@ minimized unsat core, so the success path pays nothing for explanations.
 `explain()` and may try bounded candidates against the original constructor.
 Failure of this search is `GenerationExhausted`, including when every remaining
 candidate in a bounded or blocked search has been tried. Solver `unknown` and
-timeouts have separate exception types. The solver budget applies to solver
-queries; it cannot interrupt arbitrary Python user code. Pure deterministic,
-terminating validators are a precondition.
+exhausted budgets have separate exception types. The solver budget applies to
+solver queries; it cannot interrupt arbitrary Python user code. Pure
+deterministic, terminating validators are a precondition.
 
 Fixed inputs use canonical types: exact `int`, `bool`, `str`, `date`, naive
 `datetime` or `timedelta`, actual enum members, supported literal values, and
@@ -125,27 +127,64 @@ constructor unchanged. They cannot weaken an UNSAT claim, because no extracted
 predicate can mention them: a validator that reads an external field is
 unsupported, which already rules out UNSAT.
 
-Sampling is deliberately nonuniform. Seeded preferences encourage different
-solutions but do not guarantee uniqueness or statistically uniform coverage.
-For integer, date and time fields, one box-mode optimization finds each field's
-feasible minimum and maximum (cached per set of fixed inputs), so targets land
-inside real ranges and often on their edges, rather than in a fixed window
-around zero that a range such as 1,000–1,000,000 would never meet. An optional
-field's range covers its non-None values, so it gets a query of its own: adding
-"not None" to the shared query would force every optional field to be present at
-once. A missing bound, from an unbounded side or a timed-out query, falls back to
-steps from the other bound or a window around typical values.
-Reusing a `ModelFiller` avoids repeated analysis. Each thread receives its own
-solver, private Z3 context and random generator; only compiled immutable
-information is shared. Reproducibility is scoped to the same model,
-configuration, dependency versions and serial call order within a thread. Threads
-given the same seed may produce duplicate sequences. Compilation and the
-top-level convenience filler use bounded LRU caches keyed by model class.
-
 Z3 strings are restricted to code points U+0000 through U+2FFFF. Fixed strings
 outside that range are explicitly unsupported. Literal backslashes are escaped
 when crossing the solver boundary, and solver escape decoding uses one pass so a
 Python string such as `r"\u{41}"` remains literal text.
+
+## Canonical completion
+
+Canonical completion is incremental pinning on the same solver that proves
+impossibility. In a session holding the fixed inputs, guidance (on guided
+attempts) and then defaults are pinned where they fit, in declaration order.
+Every remaining field is resolved in declaration order and pinned before the
+next: `None` for an optional field, the first allowed choice, `False`, the
+integer encoding nearest its anchor, or a readable string. The nearest integer
+comes from plain satisfiability probes: the anchor itself, then the least
+allowed value above it, by bisection that starts from the model's own value
+(often the minimum already), then a strictly closer value below. Strings try
+readable candidates in a fixed order. Each answer is the unique best value under
+the rule, so it depends neither on which model Z3 returns nor on solver history
+or the Z3 version. The price is around a dozen small checks for the three-field
+meeting; bisection is logarithmic in the gap between anchor and value.
+
+`Optimize` with lexicographic priorities could fold the integer fields into one
+query, but strings are not objectives, so the problem would split at every
+string field; `None`, ordered choices and ties need extra objective encodings;
+and the optimizer is a separate engine with its own performance and budget
+behavior. Pinning keeps one engine and one budget rule for proofs and choices.
+
+Defaults are settled before any anchor rather than interleaved with them in
+declaration order. A default that fits therefore always wins, wherever its field
+is declared, so reordering fields never changes the result. Interleaving would
+drop a valid default whenever an earlier field's anchor conflicts with it: if
+`balance >= minimum_balance` and `minimum_balance` defaults to 100, interleaving
+gives `balance=0, minimum_balance=0` but the reverse declaration order gives 100
+and 100. The cost of settling defaults first is that fixing a defaulted field can
+release an earlier field that its default held: fixing `minimum_balance=0` moves
+`balance` from 100 to 0 even though 100 would still be valid.
+
+Every solver query runs under a per-check Z3 resource limit (`rlimit`), the
+`work_limit` option, which counts work rather than time and so decides the same
+way on any machine. The test suite's heaviest check uses about 2,500 of its
+default 1,000,000 units; sustained solving burns 2,000-7,000 units per
+millisecond on a desktop, so the default is roughly 0.15-0.5 s of work, inside
+the 1 s default of `timeout_ms`, which remains a wall-clock safety net. The
+option exists because the limit is what decides: a heavy model that hits it
+needs a way to raise it. A canonical probe that cannot finish raises
+`SolverTimeout` or `SolverUnknown` rather than settling for another value, so a
+returned value never depends on machine speed. Resource use does depend on
+solver history, so close to the limit, whether a query finishes can depend on
+earlier calls; it then raises, and never returns a different value.
+
+The answer depends only on the fixed inputs and default values, so each thread
+caches canonical assignments by them (bounded): a repeated fill reruns only
+construction, and default factories still run once per call. `batch` excludes
+each completion in turn, enumerating distinct completions in canonical order.
+Reusing a `ModelFiller` avoids repeated analysis. Each thread receives its own
+solver and private Z3 context; only compiled immutable information is shared.
+Compilation and the top-level convenience filler use bounded LRU caches keyed by
+model class.
 
 ## CrossHair decision
 
@@ -177,35 +216,52 @@ solving it in either direction: fixing an endpoint and duration can determine th
 start. This does not claim that modelfill replaces Polyfactory's larger type
 coverage or factory customization.
 
-## Hypothesis integration
+## Exploration lives in Hypothesis
 
-modelfill is positioned as a plugin rather than a replacement: `from_model`
-lets Hypothesis draw the fields a test cares about and any required external
-fields, then solves the rest. Each example builds a fresh solver seeded from a
-Hypothesis draw, because an incremental solver's answers depend on its history;
-a fresh one makes every example a pure function of the draws, so failures replay
-and shrink. A proven contradiction becomes `reject()`, which filters impossible
-draws without the excessive-filtering failures that `.filter()` would cause for
-cross-field rules.
+Edge-biased random values find bugs, but in fields a test does not care about
+they cause failures unrelated to the test's intent. Exploration is also only
+useful with shrinking, replay and a failure database. Hypothesis has all of
+them, so modelfill keeps no second, weaker engine on its default path: `fill` is
+canonical, and the random sampler is reachable only through `from_model`.
+
+`from_model` lets Hypothesis draw the fields a test cares about and any required
+external fields, then solves the rest with that sampler: seeded soft preferences
+in shuffled field order, discarded when infeasible. Integer, date and time
+targets land inside each field's feasible range and often on its edges, from one
+box-mode optimization per set of fixed inputs, plus one per optional field over
+its non-None values (adding "not None" to the shared query would force every
+optional field to be present at once). A missing bound, from an unbounded side
+or a timed-out query, falls back to steps from the other bound or a window
+around typical values. Choices are uniform, optional fields are `None` a quarter
+of the time, and strings are random lowercase text. Each example builds a fresh
+solver seeded from a Hypothesis draw, because an incremental solver's answers
+depend on its history; a fresh one makes every example a pure function of the
+draws, so failures replay and drawn fields shrink. A proven contradiction
+becomes `reject()`, which filters impossible draws without the
+excessive-filtering failures that `.filter()` would cause for cross-field rules.
 
 ## Verification and measurement
 
-Acceptance tests exercise bidirectional completion, coupled constraints,
+Acceptance tests exercise canonical values and their independence from call
+order, threads and time budgets, bidirectional completion, coupled constraints,
 dataclasses, canonical fixed inputs, defaults, optional, date and external
 fields, and bounded fallback. Exhaustive small-domain differential tests compare
 fixed assignments against ordinary Python validation, especially branch
 reachability, Boolean operands, `None` guards and date arithmetic.
 
 `uv run python -m benchmarks.benchmark --count 100 --repeat 5` reports local
-medians for cold compilation and warm generation. Cold measurements create fresh
-Pydantic subclasses to avoid the model cache, so they also include class
-creation overhead. All measurements include original validation. These numbers
-are environment-specific and are not comparisons with other libraries.
+medians. Cold compiles and solves; cold measurements create fresh Pydantic
+subclasses to avoid the model cache, so they also include class creation
+overhead. Warm repeats a fill, which reuses the cached canonical assignment.
+Solve clears that cache first, as for fills whose fixed inputs keep changing.
+All measurements include original validation. These numbers are
+environment-specific and are not comparisons with other libraries.
 
 One measured run on Windows AMD64, Python 3.12.10, Pydantic 2.14.1 and Z3 4.16.0
 (100 instances per run, median of five runs) produced:
 
 | Operation | Total | Per instance |
 | --- | ---: | ---: |
-| Cold | 1060.30 ms | 10.603 ms |
-| Warm | 117.79 ms | 1.178 ms |
+| Cold | 850.53 ms | 8.505 ms |
+| Warm | 0.61 ms | 0.006 ms |
+| Solve | 258.80 ms | 2.588 ms |

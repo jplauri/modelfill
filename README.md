@@ -1,13 +1,19 @@
 # modelfill
 
-**Define validation rules once. Generate valid objects automatically.**
+**Fix only the fields your test cares about. modelfill fills in the rest with
+boring, valid, deterministic values.**
 
-modelfill completes Pydantic models and standard dataclasses by translating their
-existing validation rules into solver constraints. It solves for missing fields
-in either direction and runs the original constructor before returning anything.
-Models require no changes, factory classes, decorators, or duplicate rules. It
-also plugs into [Hypothesis](#hypothesis): Hypothesis draws the fields you care
-about, and modelfill solves the rest consistently.
+modelfill completes Pydantic models and standard dataclasses from their existing
+validation rules. It translates the rules into solver constraints, solves for the
+missing fields in either direction and runs the original constructor before
+returning anything. Every value it picks is [canonical](#canonical-values): as
+close to 0, `False`, `None`, 2025-01-01 or the field's own name as the rules
+allow, and the same on every run. Models require no changes, factory classes,
+decorators, or duplicate rules.
+
+To hunt bugs instead, [explore with Hypothesis](#exploration-with-hypothesis):
+Hypothesis draws the fields you care about, and modelfill solves the rest with
+random values that favor the edges of what the rules allow.
 
 modelfill reads a [documented subset](#exact-recognized-validator-language) of
 Python: pure, deterministic validators that reject invalid input. It reports
@@ -51,11 +57,11 @@ class Meeting(BaseModel):
         return self
 
 
+# A test that cares about end and duration fixes them; modelfill solves start.
 assert fill(Meeting, end=18, duration=4).start == 14
 assert fill(Meeting, start=10, end=13).duration == 3
 assert fill(Meeting, start=10, duration=2).end == 12
-meeting = fill(Meeting)
-assert meeting.end == meeting.start + meeting.duration
+print(fill(Meeting))  # start=8 end=9 duration=1, on every run
 
 try:
     fill(Meeting, start=17, duration=4)
@@ -64,9 +70,9 @@ except UnsatisfiableConstraints:
 else:
     raise AssertionError("Expected an impossible assignment")
 
-filler = ModelFiller(Meeting, mode="strict", seed=42)
+filler = ModelFiller(Meeting, mode="strict")
 assert filler.fill(end=18, duration=4).start == 14
-meetings = filler.batch(100)
+meetings = filler.batch(5)  # Five distinct meetings, in canonical order.
 print(filler.explain())
 ```
 
@@ -122,7 +128,7 @@ assert booking.start == datetime(2025, 3, 1, 16)
 
 ```python
 fill(Model, **fixed_fields)
-ModelFiller(Model, *, mode="auto", seed=None, max_attempts=100, timeout_ms=1000)
+ModelFiller(Model, *, mode="auto", max_attempts=100, work_limit=1_000_000, timeout_ms=1000)
 filler.fill(**fixed_fields)
 filler.batch(count, **fixed_fields)
 filler.explain()  # fresh JSON-friendly dictionary
@@ -130,7 +136,7 @@ filler.explain()  # fresh JSON-friendly dictionary
 
 - All `fill()` keywords are **canonical model field names**, even if a model uses
   input aliases. Configuration lives on `ModelFiller`; fields named `mode`,
-  `seed`, `model`, `count`, or `self` work.
+  `model`, `count`, or `self` work.
 - Fixed inputs are exact Python `int`, `bool`, `str`, `date`, naive `datetime`,
   `timedelta`, Enum members, allowed Literal values, or `None` for optional
   fields. There is no coercion: `"10"` or `True` for an `int` field, or an aware
@@ -160,8 +166,8 @@ filler.explain()  # fresh JSON-friendly dictionary
   pipeline, has canonical field types, and preserves fixed values. Neither
   `model_construct()` nor any other validation bypass is used.
 
-`batch()` returns a list, permits duplicates, and raises on the first failed fill.
-It is a convenience loop over the reusable filler.
+`batch()` returns `count` **distinct** completions in canonical order; see
+[canonical values](#canonical-values).
 
 ## Supported features
 
@@ -228,13 +234,14 @@ In **strict** mode, unsupported validation logic raises `UnsupportedConstraint`
 when the filler is created. In **auto** mode it appears in
 `explain()["unsupported"]`. If any model behavior is unsupported, auto mode
 demotes the extracted validator predicates to guidance, since unknown code may
-transform values before another validator runs. Some attempts prefer candidates
-that satisfy that guidance, but it never rules a candidate out, so misleading
-guidance cannot starve the search. Field constraints remain candidate bounds;
-normal construction still runs every original validator. It tries at most
-`max_attempts` candidates and never claims UNSAT in this fallback mode. This
-bounded search can miss valid solutions, especially narrow conditions or
-transformations.
+transform values before another validator runs. Field constraints remain
+candidate bounds; normal construction still runs every original validator. A
+candidate it rejects is excluded and the next canonical candidate is tried.
+Attempts alternate between preferring the guidance and ignoring it, so
+misleading guidance cannot starve the search, and the sequence is the same on
+every run. It tries at most `max_attempts` candidates and never claims UNSAT in
+this fallback mode. This bounded search can miss valid solutions, especially
+narrow conditions or transformations.
 
 Only `ValueError` (including Pydantic `ValidationError`) and `AssertionError`
 from ordinary construction are treated as candidate rejection. Other Python
@@ -255,36 +262,78 @@ Arbitrary Python string behavior is not modeled.
 | `UnsatisfiableConstraints` | A clean solver check proves the supported constraints plus canonical fixed assignments contradictory. No random preferences, blocked candidates or artificial bounds contribute to this result. When the solver isolates the conflict, the message names the fixed inputs, field constraints and validators involved, such as `start=17, duration=4` against `end <= 18` and `Meeting.check`. |
 | `UnsupportedConstraint` | Unsupported constructor shape, a required external field without a value, or unsupported validation in strict mode. |
 | `GenerationExhausted` | The bounded search did not find a normally validated object; also used for contradictions when unknown behavior or omitted unchecked defaults prevent an impossibility claim. |
-| `SolverTimeout` | A solver query exhausted its time budget. Subclass of `SolverUnknown`. |
-| `SolverUnknown` | Z3 could not decide SAT/UNSAT for another reason. |
+| `SolverTimeout` | A solver query exhausted its budget: its fixed work limit, or the `timeout_ms` wall-clock safety net. Subclass of `SolverUnknown`. |
+| `SolverUnknown` | Z3 could not decide SAT/UNSAT for another reason, or did not say why. |
 
 These exceptions inherit from `ModelFillError`. Incorrect API arguments raise
-`TypeError` or `ValueError`. `timeout_ms` is a **per-query** budget; a fill can make
-several solver calls per field and attempt. This is not a wall-clock deadline.
+`TypeError` or `ValueError`. Each solver query has a fixed work limit,
+`work_limit`, counted in Z3 resource units rather than time, so whether it finishes
+never depends on machine speed; a query that cannot finish raises rather than
+settling for a different value. Raise `work_limit` if a heavy model hits
+`SolverTimeout`. The unit is Z3's own, so a given limit buys about, not exactly,
+the same work across Z3 releases. `timeout_ms` is only a **per-query** wall-clock
+safety net, not a deadline for a whole fill, which makes several queries per
+field.
 
 Diagnostics include field domains, defaults, each validator's extraction status,
-unsupported reasons, whether extracted predicates are active, sampling settings
+unsupported reasons, whether extracted predicates are active, the selection mode
 and proof eligibility. In a fallback model, successfully extracted validators
 report the status `guidance` rather than `modeled`.
 
-## Sampling and performance
+## Canonical values
+
+`fill()` returns the canonical completion: a pure function of the model, the
+fixed inputs, the modelfill version and the model's own default factories. It
+never depends on call order, earlier calls, the thread or machine speed.
+
+1. Fixed inputs are hard constraints.
+2. Defaults are used where they fit the rules and fixed inputs, in declaration
+   order.
+3. Every remaining field is chosen in declaration order: it takes the allowed
+   value closest to a neutral anchor, given everything chosen before it, and is
+   pinned before the next field is chosen.
+
+| Field | Canonical value |
+| --- | --- |
+| `int` | nearest `0` |
+| `timedelta` | nearest `timedelta(0)` |
+| `date` | nearest 2025-01-01 |
+| naive `datetime` | nearest 2025-01-01 00:00 |
+| `bool` | `False` |
+| `Enum`, `Literal` | the first declared choice allowed |
+| optional (`X \| None`) | `None` when allowed |
+| `str` | the field's name, or the rule below |
+
+Distance is the absolute difference, and a tie goes to the value above the
+anchor: if `0` is not allowed but `-1` and `1` are, the value is `1`. A bound
+appears only when it is the closest allowed value. Defaults are settled before any
+anchor, so a default that fits wins over other fields' anchors. Fixing a later
+field leaves an earlier one alone unless the rules force it to move, or the fixed
+value replaces a default that had moved it: `fill(Meeting, duration=3)` keeps
+`start=8`, while `end=18` forces `start=14`.
+
+Strings never come from the solver's own string choices. The rule is the
+field's name; else `name_1` to `name_9`; else the name cut or padded with `_` to
+the allowed length nearest its own (a tie goes longer), then that with its last
+character replaced by `1` to `9`; else the strings the rules mention, then other
+fields' string values, so a confirmation field copies its password.
+
+`batch(count)` returns `count` distinct completions, compared on generated
+fields, in canonical order: the canonical completion, then the canonical
+completion of what remains once each earlier one is excluded. It raises
+`GenerationExhausted` when fewer distinct valid completions exist or can be found
+within the budget.
+
+Canonical values are stable within a release but **not across versions**: a later
+release may choose differently. A test should fix every field it asserts on.
 
 The solver's hard domains have no arbitrary integer or string-length bounds.
-Sampling tries seeded soft preferences and discards infeasible ones. Integer,
-date and time values spread across each field's feasible range and often sit on
-its bounds, where tests usually find bugs; a field the solver cannot bound
-samples near typical values instead. Assignments are varied but **nonuniform**,
-with duplicates allowed; for distribution control and shrinking, use the
-[Hypothesis strategy](#hypothesis).
-
-The same seed, model, dependency versions and serial per-thread call order give
-repeatable sequences. Cross-version or cross-thread ordering is not guaranteed.
-Each thread owns a separate Z3 context, solver and RNG; immutable compiled
-information is shared. Separate threads with the same seed may repeat sequences.
-Compiled models and the convenience `fill()` fillers live in bounded caches.
-Treat model definitions and the Enum classes and constants their validators read
-as immutable after first compilation; restart the process after monkeypatching
-or rebuilding a model.
+Each canonical assignment is cached per fixed inputs and default values, so a
+repeated fill only reruns construction. Each thread owns a separate Z3 context and
+solver; immutable compiled information is shared, and compiled models and the
+convenience `fill()` fillers live in bounded caches. Treat model definitions and
+the Enum classes and constants their validators read as immutable after first
+compilation; restart the process after monkeypatching or rebuilding a model.
 
 ```sh
 uv run python -m benchmarks.benchmark --count 100 --repeat 5
@@ -293,13 +342,16 @@ uv run python -m benchmarks.benchmark --count 100 --repeat 5
 Measured results, the design and comparisons with Polyfactory and CrossHair are
 in [the design document](https://github.com/jplauri/modelfill/blob/master/docs/architecture.md).
 
-## Hypothesis
+## Exploration with Hypothesis
 
-`modelfill.hypothesis.from_model` is a Hypothesis strategy. Pass strategies for
-the fields you want Hypothesis to drive; required external fields default to
-`st.from_type`, and modelfill solves the rest from the validators. To set
-`mode`, `max_attempts` or `timeout_ms`, pass a configured `ModelFiller` in place
-of the class, so options never collide with field names:
+Canonical values are for tests that need *a* valid object. To hunt bugs, explore
+with `modelfill.hypothesis.from_model`, a Hypothesis strategy that needs the
+`hypothesis` extra. Pass strategies for the fields you want Hypothesis to drive;
+required external fields default to `st.from_type`, and modelfill solves the rest
+from the validators. Unlike `fill()`, it picks those values at random, often at
+the edges of their feasible ranges, where bugs tend to hide. To set `mode`,
+`max_attempts`, `work_limit` or `timeout_ms`, pass a configured `ModelFiller` in
+place of the class, so options never collide with field names:
 
 ```python
 from datetime import datetime, timedelta
@@ -333,7 +385,8 @@ def test_shift_rules(shift):
 Draws that make the rules impossible (here `break_minutes` outside 0–60) are
 rejected rather than failing the test, and cross-field rules never need
 `.filter()`. Each example uses a fresh solver seeded from the draw, so failing
-examples replay and the drawn fields shrink as usual.
+examples replay and the drawn fields shrink as usual. The solved fields replay
+too, but do not shrink.
 
 ## Development
 

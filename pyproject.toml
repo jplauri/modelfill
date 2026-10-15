@@ -1,6 +1,6 @@
 [project]
 name = "modelfill"
-version = "0.1.0"
+version = "0.2.0"
 description = "Complete Pydantic models and dataclasses from their existing constraints"
 readme = "README.md"
 authors = [{ name = "Juho Lauri" }]
