@@ -264,8 +264,9 @@ class Solver:
 
     def texts(self, name: str, known: Sequence[str]) -> Generator[str]:
         """Readable string candidates in canonical order, probing lengths only as needed."""
-        yield name
         length = z3.Length(self.variables[name])
+        name = name.rpartition(".")[2]  # A nested field reads as its own name.
+        yield name
         if self.fits(length == len(name) + 2):
             yield from (f"{name}_{number}" for number in range(1, 10))
         size = self.nearest(length, len(name))

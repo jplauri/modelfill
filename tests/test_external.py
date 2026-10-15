@@ -90,7 +90,7 @@ def test_a_dict_fixes_fields_of_a_nested_model():
     assert fill(Order, customer={"age": 30}).customer == Customer(id=NIL4, name="name", age=30)
     given = Customer(id=uuid4(), name="Ada", age=40)
     assert fill(Order, customer=given).customer is given  # An instance is used as it is.
-    with pytest.raises(UnsatisfiableConstraints, match="^customer: Customer: age=10"):
+    with pytest.raises(UnsatisfiableConstraints, match="customer.age=10 conflict with"):
         fill(Order, customer={"age": 10})
 
 
@@ -139,7 +139,13 @@ def test_providers_beat_defaults_and_a_path_beats_a_type():
     assert (keyed.id, keyed.customer.id, keyed.note) == (seven, nine, "keep")
     assert filler.fill(id=uuid4()).id != seven  # Your own value still wins.
     sources = {name: field["default"] for name, field in filler.explain()["fields"].items()}
-    assert sources == {"id": "provider", "customer": "nested model", "note": "preference"}
+    assert sources == {
+        "id": "provider",
+        "customer": "nested model",
+        "note": "preference",
+        "customer.name": "generated",  # Solved with the outer model, by path.
+        "customer.age": "generated",
+    }
 
 
 @pytest.mark.parametrize(

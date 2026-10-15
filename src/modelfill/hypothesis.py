@@ -33,10 +33,11 @@ def from_model[T](
     fields do not shrink.
     """
     template = model if isinstance(model, ModelFiller) else ModelFiller(model)
+    solved_nested = dict(template._compiled.nested)  # Explored by the solver instead.
     strategies = {
         field.name: st.from_type(field.annotation)
         for field in template._compiled.adapter.fields
-        if field.domain is None and field.required
+        if field.domain is None and field.required and field.name not in solved_nested
     }
     strategies.update(fields)
 

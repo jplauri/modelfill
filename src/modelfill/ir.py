@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from enum import Enum, EnumType, Flag, IntEnum, ReprEnum, StrEnum
 from typing import Any, Literal
@@ -130,6 +130,13 @@ def const(value: Any) -> Expr:
 
 def node(op: str, *args: Expr, sort: Domain = BOOL) -> Expr:
     return Expr(op, sort, args)
+
+
+def prefixed(expr: Expr, prefix: str) -> Expr:
+    """The same expression over a nested model's fields: age becomes customer.age."""
+    if expr.op == "var":
+        return replace(expr, value=prefix + expr.value)
+    return replace(expr, args=tuple(prefixed(arg, prefix) for arg in expr.args))
 
 
 def evaluate(expr: Expr, values: Mapping[str, Any]) -> Any:

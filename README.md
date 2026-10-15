@@ -182,6 +182,7 @@ filler.explain()  # fresh JSON-friendly dictionary
 | String metadata | `Field(min_length, max_length)` and global `str_min_length` / `str_max_length` |
 | Model validators | Instance `@model_validator(mode="after")`, returning the original `self` on successful paths |
 | Field validators | `@field_validator(mode="after")`, returning the original value, including literal `info.data["earlier_field"]` reads |
+| Nested models | A required nested model (Pydantic or dataclass) is solved with its parent: rules may read `self.customer.age`, and a dict fixes some of its fields. Optional nested models and those with defaults are completed on their own |
 | Aliases | Simple, distinct string input/validation aliases; API still uses field names |
 | Defaults | Copied values and zero-argument factories as preferences |
 | Fixed fields | Any subset, solved simultaneously; no left-to-right dependency order required |
@@ -202,7 +203,7 @@ enforces it, so modelfill does not impose it.
 | Statements | `if` / `elif` / `else`, `pass`, string docstrings, `assert`, supported `raise`, supported `return`, single-name local assignments (`x = …`, `x: T = …`) outside branches, other than to validator parameters |
 | Rejection | `raise ValueError` with any message, including f-strings (messages only run on paths that already reject), without a `from` clause; a failing `assert`, which `python -O` removes as usual |
 | Successful return | Original `self` for model validators, original value for field validators; bare return, `return None`, or fallthrough for dataclasses |
-| References | `self.field`; field validator value parameter; `info.data["earlier_field"]`; previously assigned locals; named constants and standard Enum members from globals/closures |
+| References | `self.field`, and `self.customer.age` through required nested models; field validator value parameter, or its fields when it validates a nested model; `info.data["earlier_field"]`; previously assigned locals; named constants and standard Enum members from globals/closures |
 | Constants | Integer, Boolean, string, `None`; `date(…)`, `datetime(…)` and `timedelta(…)` calls with integer literal arguments |
 | Arithmetic | Integer/Boolean `+`, `-`, unary `+`/`-`; multiplication with an integer literal operand; `%` and `//` by a positive integer literal; Python's date rules: `datetime ± timedelta`, `datetime - datetime`, `date ± timedelta` (whole days, like `timedelta.days`), `date - date`, `timedelta ± timedelta`, `timedelta * int literal`, `-timedelta` |
 | Comparisons | `==`, `!=`; `<`, `<=`, `>`, `>=` between numbers or two values of one date/time type; chained comparisons; identity checks only against `None` |
@@ -296,7 +297,8 @@ never depends on call order, earlier calls, the thread or machine speed.
    order.
 3. Every remaining field is chosen in declaration order: it takes the allowed
    value closest to a neutral anchor, given everything chosen before it, and is
-   pinned before the next field is chosen.
+   pinned before the next field is chosen. A required nested model's fields take
+   its place in that order.
 
 | Field | Canonical value |
 | --- | --- |
@@ -356,7 +358,9 @@ its value from the first of these:
    completes the rest;
 2. a provider, keyed by field path or by type; a path beats a type;
 3. the model's own default;
-4. for a nested model, its own canonical completion; otherwise a boring value.
+4. for a nested model, its canonical completion; otherwise a boring value. A
+   required nested model is solved together with its parent, so the parent's
+   rules can read its fields and a fixed parent field can determine them.
 
 ```python
 from uuid import UUID
@@ -407,7 +411,9 @@ A field with no value from any source, such as one of an arbitrary class, raises
 `FutureDate`, whose validity depends on the clock. If Pydantic rejects a boring
 value, for example because of a custom validator, `GenerationExhausted` names
 the field at once. Validators that read these fields remain unsupported logic,
-so a model with one falls back to the bounded search.
+so a model with one falls back to the bounded search; so does a rule that reads
+an optional nested model or one with a default, and any unsupported logic inside
+a nested model makes the whole object fall back.
 
 ## Exploration with Hypothesis
 
