@@ -442,17 +442,16 @@ class PlainString(BaseModel):
     text: str
 
 
-# Z3's string range without surrogates; seeded samples complement the escape cases.
-CODE_POINTS = [*range(0xD800), *range(0xE000, 0x30000)]
-RANDOM_TEXTS = [
-    "".join(map(chr, random.Random(seed).sample(CODE_POINTS, 12))) for seed in range(20)
-]
+# Arbitrary text is covered by the property tests; these are the escape edge cases.
 ESCAPES = [r"\u{41}", r"\u{1f600}", r"\\u{41}", "back\\slash", "\x00", '"\n\t\x00', "🙂", "a\nβ"]
 
 
-@pytest.mark.parametrize("text", ["", "ordinary", *ESCAPES, *RANDOM_TEXTS])
+@pytest.mark.parametrize("text", ["", "ordinary", *ESCAPES])
 def test_solver_strings_round_trip_without_escape_interpretation(text):
-    assert ModelFiller(PlainString, mode="strict").fill(text=text).text == text
+    # Canonical fills pass fixed values straight through; from_model's sampler reads
+    # every value back from the solver, so it exercises the decoding.
+    sampler = ModelFiller(PlainString, mode="strict")._complete({"text": text}, 1, random.Random(0))
+    assert sampler[0].text == text
 
 
 class IntegerEndpoints(BaseModel):
