@@ -49,6 +49,7 @@ def from_model[T](
             max_attempts=template.max_attempts,
             work_limit=template.work_limit,
             timeout_ms=template.timeout_ms,
+            providers=template.providers,
         )
         rng = random.Random(draw(st.integers(0, 2**32 - 1)))
         try:

@@ -57,6 +57,7 @@ class FieldSpec:
     unchecked_default: bool = False
     required: bool = True
     annotation: Any = None
+    metadata: tuple[Any, ...] = ()  # Pydantic's constraints, for boring values of external fields.
 
     def preferred(self) -> Any:
         """Evaluate an ordinary default once per fill; it is a preference."""
@@ -105,15 +106,6 @@ class Adapter:
                 raise TypeError(
                     f"Fixed field {name!r} requires a canonical {expected} value, got {value!r}"
                 )
-        missing = [
-            field.name
-            for field in self.fields
-            if field.domain is None and field.required and field.name not in values
-        ]
-        if missing:
-            raise UnsupportedConstraint(
-                f"modelfill cannot generate {', '.join(missing)}; pass values for them"
-            )
 
 
 def _domain(annotation: Any) -> Domain | None:
@@ -353,6 +345,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
                 unchecked,
                 info.is_required(),
                 info.annotation,
+                tuple(info.metadata),
             )
         )
     inputs = [field.input_name or field.name for field in fields]

@@ -2,7 +2,7 @@
 
 import random
 from datetime import datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from hypothesis import find, given, settings
 from hypothesis import strategies as st
@@ -75,3 +75,14 @@ def test_exploration_spreads_over_the_feasible_range_and_its_edges():
     for values in ({wide.amount for wide in wides}, {wide.optional for wide in wides} - {None}):
         assert {1000, 1_000_000} <= values
         assert len(values) > 40
+
+
+class Tagged(BaseModel):
+    n: int
+    id: UUID = Field(default_factory=uuid4)
+
+
+@settings(max_examples=5, deadline=None)
+@given(from_model(ModelFiller(Tagged, providers={UUID: lambda: UUID(int=7)})))
+def test_a_configured_filler_brings_its_providers(tagged):
+    assert tagged.id == UUID(int=7)  # The provider beats the model's random default.

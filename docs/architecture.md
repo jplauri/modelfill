@@ -121,11 +121,17 @@ Diagnostics list them under `unsat_requires_explicit_fields`. modelfill never
 returns an unchecked default merely because ordinary Pydantic construction
 permits it.
 
-External fields are the exception that makes real models usable: their values
-come from the caller, or the model's own default applies, and they pass to the
-constructor unchanged. They cannot weaken an UNSAT claim, because no extracted
-predicate can mention them: a validator that reads an external field is
-unsupported, which already rules out UNSAT.
+External fields are the exception that makes real models usable. Their values
+come from the caller, a provider, the model's own default, a nested model's
+canonical completion or a fixed boring value, in that order, and they pass to the
+constructor, which validates them as usual; only solved fields must keep their
+exact type. They cannot weaken an UNSAT claim, because no extracted predicate can
+mention them: a validator that reads an external field is unsupported, which
+already rules out UNSAT. A nested model is completed by its own filler, so a
+contradiction among a nested dict's fields is proven by that filler's solver and
+is a genuine impossibility for the outer model too. When Pydantic rejects a
+boring or provided value, retrying cannot help, because retries change only
+solved fields, so the error names the field at once.
 
 Z3 strings are restricted to code points U+0000 through U+2FFFF. Fixed strings
 outside that range are explicitly unsupported. Literal backslashes are escaped
