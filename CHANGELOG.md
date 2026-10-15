@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- String patterns: a `pattern` in `Field`, `constr` or `StringConstraints` no
+  longer makes a model fall back. Pydantic's own validation decides what matches,
+  under either regex engine, and canonical values are spelled from the pattern,
+  following the field's name where it fits: `^[A-Z]{3}$` gives a `code` field
+  `COD`, and `^\d{5}$` gives `00000`. A fixed value that breaks a pattern is a
+  proven contradiction, and exploration draws random matching values.
+- Constraint groups such as `conint()`, `constr()`, `StringConstraints` and
+  `Interval` are read as their single constraints, and the `regex_engine` setting
+  is supported.
+
+### Fixed
+
+- When the search runs out of readable strings, the error keeps its usual details,
+  such as the unsupported logic and the last rejection.
+
 ## 0.3.0
 
 Most models now fill without arguments, and rules can read the fields of nested

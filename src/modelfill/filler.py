@@ -23,6 +23,7 @@ from .errors import (
 )
 from .extract import extract_validator
 from .ir import Domain, Expr, encodable, prefixed
+from .patterns import Pattern
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,10 @@ class _Compiled:
     @property
     def guidance(self) -> tuple[Expr, ...]:
         return tuple(rule for _, rule in self.predicates) if self.unsupported else ()
+
+    @property
+    def patterns(self) -> dict[str, Pattern]:
+        return {name: field.pattern for name, field in self.solved if field.pattern is not None}
 
 
 _COMPILING = threading.local()  # The models being compiled, to stop a model nesting itself.
@@ -149,6 +154,12 @@ def _get(instance: Any, path: str) -> Any:
     return instance
 
 
+def _inside_instance(path: str, inputs: Mapping[str, Any]) -> bool:
+    """Whether a path's value comes from a given nested instance, such as inputs["customer"]."""
+    parts = path.split(".")
+    return any(".".join(parts[:index]) in inputs for index in range(1, len(parts)))
+
+
 def _contradiction(model: str, given: list[str], rules: list[str]) -> str:
     if not rules:
         return f"{model}: constraints contradict the fixed inputs"
@@ -238,6 +249,7 @@ class ModelFiller[T]:
                 timeout_ms=self.timeout_ms,
                 work_limit=self.work_limit,
                 guidance=self._compiled.guidance,
+                patterns=self._compiled.patterns,
             )
             self._local.cache = {}  # Canonical assignments by fixed values and defaults.
         return self._local.solver
@@ -261,12 +273,30 @@ class ModelFiller[T]:
         # The solver sees generated fields; external values go straight to the constructor.
         inputs, chosen = self._inputs(fixed_fields)
         solved = {name: value for name, value in inputs.items() if name in domains}
+        # A fixed value that breaks its pattern can never validate, unless unsupported
+        # logic, such as a before validator, changes it first. A given nested instance
+        # is used as it is, so its values are not checked again.
+        for name, pattern in self._compiled.patterns.items():
+            value = solved.get(name)
+            if (
+                isinstance(value, str)
+                and not self._compiled.unsupported
+                and not _inside_instance(name, inputs)
+                and value not in pattern
+            ):
+                given, rules = [f"{name}={value!r}"], [f"{name} pattern '{pattern.source}'"]
+                raise UnsatisfiableConstraints(_contradiction(self.model.__name__, given, rules))
         defaults = {}
         for name, field in self._compiled.solved:
             if name not in solved:
                 value = field.preferred()
-                # A default the solver cannot represent is simply not preferred.
-                if domains[name].accepts(value) and encodable(value):
+                # A default the solver cannot represent or that breaks the field's
+                # pattern is simply not preferred.
+                if (
+                    domains[name].accepts(value)
+                    and encodable(value)
+                    and (field.pattern is None or value is None or value in field.pattern)
+                ):
                     defaults[name] = value
         solver = self._solver()
         # A canonical completion depends only on these, so repeated fills reuse it.
@@ -281,6 +311,7 @@ class ModelFiller[T]:
         omitted = [name for name in self._compiled.unchecked if name not in solved]
         results: list[T] = []
         failures = 0
+        stuck = ""  # Why no further candidate could be chosen, if that ended the search.
         with solver.session(solved):
             # This first check has no preferences or candidate exclusions.
             if not solver.check():
@@ -301,10 +332,14 @@ class ModelFiller[T]:
                     break  # Every remaining candidate has been tried.
                 # Alternate, so guidance misled by an unknown hook cannot starve the search.
                 guided = failures % 2 == 0
-                if rng is None:
-                    candidate = solver.canonical(solved, defaults, guided=guided)
-                else:
-                    candidate = solver.candidate(solved, defaults, rng, guided=guided)
+                try:
+                    if rng is None:
+                        candidate = solver.canonical(solved, defaults, guided=guided)
+                    else:
+                        candidate = solver.candidate(solved, defaults, rng, guided=guided)
+                except GenerationExhausted as exc:
+                    stuck = str(exc)  # No readable or matching string remains, say.
+                    break
                 solver.block(candidate)  # Retries and batch members must differ.
                 try:
                     results.append(self._construct(inputs, candidate))
@@ -332,11 +367,12 @@ class ModelFiller[T]:
         if len(results) == count:
             return results
         found = f"found {len(results)} of {count} distinct completions; " if count > 1 else ""
-        reason = (
-            f"no validated completion within {self.max_attempts} attempts"
-            if failures >= self.max_attempts
-            else "no candidates remain"
-        )
+        if stuck:
+            reason = stuck
+        elif failures >= self.max_attempts:
+            reason = f"no validated completion within {self.max_attempts} attempts"
+        else:
+            reason = "no candidates remain"
         message = f"{self.model.__name__}: {found}{reason}"
         if self._compiled.unsupported:
             message += "; unsupported logic: " + "; ".join(self._compiled.unsupported)
@@ -501,13 +537,16 @@ class ModelFiller[T]:
                 source = "required input"
             return {"type": "external", "choices": None, "default": source}
         has_default = field.default is not MISSING or field.default_factory is not None
-        return {
+        description = {
             "type": domain.kind + (" | None" if domain.nullable else ""),
             "choices": None
             if domain.choices is None
             else [repr(value) for value in domain.choices],
             "default": "preference" if has_default else "generated",
         }
+        if field.pattern is not None:
+            description["pattern"] = field.pattern.source
+        return description
 
     def explain(self) -> dict[str, Any]:
         """Return fresh, JSON-friendly compilation and generation diagnostics."""

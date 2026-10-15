@@ -9,12 +9,17 @@ from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime
 from enum import Enum
-from typing import Any
+from functools import cache
+from itertools import islice
+from typing import TYPE_CHECKING, Any
 
 import z3
 
 from .errors import GenerationExhausted, SolverTimeout, SolverUnknown, UnsupportedConstraint
 from .ir import BOUNDS, DAY, Domain, Expr, decode, encodable, encode
+
+if TYPE_CHECKING:
+    from .patterns import Pattern
 
 # Kinds Z3 sees as integers: (anchor, step, spread). Canonical values sit as close to
 # the anchor as the rules allow. The exploration sampler targets a finite feasible
@@ -50,8 +55,11 @@ class Solver:
         timeout_ms: int,
         work_limit: int,
         guidance: Sequence[Expr] = (),
+        patterns: Mapping[str, Pattern] | None = None,
     ) -> None:
         self.domains = dict(domains)
+        # String fields' patterns stay out of Z3: candidates are checked against them.
+        self.patterns = dict(patterns or {})
         self.timeout_ms = timeout_ms
         self.work_limit = work_limit
         self.context = z3.Context()
@@ -262,8 +270,12 @@ class Solver:
         assert above is not None  # A satisfiable session has a value on some side.
         return above
 
-    def texts(self, name: str, known: Sequence[str]) -> Generator[str]:
-        """Readable string candidates in canonical order, probing lengths only as needed."""
+    def texts(self, name: str, known: Sequence[str], spelled: Iterable[str] = ()) -> Generator[str]:
+        """Readable string candidates in canonical order, probing lengths only as needed.
+
+        Values spelled from a pattern follow the name's: the first one comes before
+        strings that the rules or other fields mention, the rest after them.
+        """
         length = z3.Length(self.variables[name])
         name = name.rpartition(".")[2]  # A nested field reads as its own name.
         yield name
@@ -273,17 +285,43 @@ class Solver:
         base = (name + "_" * size)[:size]
         yield base
         yield from (base[:-1] + digit for digit in "123456789" if size)
+        spelled = iter(spelled)
+        yield from islice(spelled, 1)
         yield from self.strings  # Strings the rules mention, then other fields' values.
         yield from known
+        yield from spelled
 
     def text(self, name: str, known: Sequence[str]) -> str:
-        """The first readable candidate the rules allow; never Z3's own string choice."""
+        """The first readable candidate the rules allow; never Z3's own string choice.
+
+        With a pattern, a candidate must match it too, and values spelled from the
+        pattern join the candidates.
+        """
+        pattern = self.patterns.get(name)
+        spelled = () if pattern is None else islice(self.spelled(name, pattern), 256)
         tried = set()
-        for value in self.texts(name, known):
-            if value not in tried and encodable(value) and self.fits(self.equal(name, value)):
+        for value in self.texts(name, known, spelled):
+            if (
+                value not in tried
+                and encodable(value)
+                and (pattern is None or value in pattern)
+                and self.fits(self.equal(name, value))
+            ):
                 return value
             tried.add(value)
-        raise GenerationExhausted(f"No readable canonical string for {name!r}")
+        if pattern is None:
+            raise GenerationExhausted(f"no readable string remains for {name!r}")
+        raise GenerationExhausted(
+            f"found no string for {name!r} that matches '{pattern.source}'; pass a value"
+        )
+
+    def spelled(self, name: str, pattern: Pattern) -> Generator[str]:
+        """Values spelled from a pattern, at lengths the rules allow."""
+        length = z3.Length(self.variables[name])
+        lowest = self.least(length, -1)
+        if lowest is not None:
+            allowed = cache(lambda size: self.fits(length == size))
+            yield from pattern.spell(name.rpartition(".")[2], allowed, lowest)
 
     def resolve(self, name: str, known: Sequence[str]) -> Any:
         """A free field's canonical value, given everything pinned so far."""
@@ -463,10 +501,13 @@ class Solver:
                 elif domain.kind in _INTEGERS:
                     target = self.integer_target(name, reference, rng)
                 else:
-                    length = min(len(reference or ""), 64) + rng.randint(0, 8)
-                    target = "".join(
-                        rng.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(length)
-                    )
+                    pattern = self.patterns.get(name)
+                    target = None if pattern is None else pattern.sample(rng)
+                    if target is None:
+                        length = min(len(reference or ""), 64) + rng.randint(0, 8)
+                        target = "".join(
+                            rng.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(length)
+                        )
                 self.prefer(self.equal(name, target))
             if not self.check():
                 raise RuntimeError("A checked preference unexpectedly became unsatisfiable")

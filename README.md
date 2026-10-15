@@ -179,7 +179,7 @@ filler.explain()  # fresh JSON-friendly dictionary
 | Dataclasses | Standard dataclasses, including frozen and slotted classes; pure `__post_init__`, when the generated `__init__` calls it (a subclass that is not decorated again never runs its own) |
 | Types | Exact `int`, `bool`, `str`, `date`, naive `datetime`, `timedelta`; ordinary `Enum`, `IntEnum`, `StrEnum`; homogeneous `Literal` subsets; any of these `\| None` (`Optional`, or `None` inside a `Literal`); other types as [external fields](#fields-the-solver-does-not-model) |
 | Numeric metadata | Integer, date, datetime and timedelta `Field(gt, ge, lt, le)`, respecting strict and inclusive bounds; integer `Field(multiple_of)`; on optional fields they constrain non-None values, as in Pydantic |
-| String metadata | `Field(min_length, max_length)` and global `str_min_length` / `str_max_length` |
+| String metadata | `Field(min_length, max_length)` and global `str_min_length` / `str_max_length`; a [`pattern`](#string-patterns), with either regex engine |
 | Model validators | Instance `@model_validator(mode="after")`, returning the original `self` on successful paths |
 | Field validators | `@field_validator(mode="after")`, returning the original value, including literal `info.data["earlier_field"]` reads |
 | Nested models | A required nested model (Pydantic or dataclass) is solved with its parent: rules may read `self.customer.age`, and a dict fixes some of its fields. Optional nested models and those with defaults are completed on their own |
@@ -191,10 +191,28 @@ Pydantic field metadata is read through public `model_fields`, and combines as
 Pydantic combines it: when a field repeats one kind of bound, the last one wins,
 with `Field()` counted before `Annotated[...]`. So `Field(ge=10)` on an
 `Annotated[int, Ge(0)]` alias leaves `ge=0` in force, in Pydantic and modelfill
-alike. Validator discovery uses Pydantic's private `__pydantic_decorators__`
-registry; CI tests it against the oldest supported Pydantic release. Dataclass
-`Annotated` metadata is not a validation rule unless the dataclass's own code
-enforces it, so modelfill does not impose it.
+alike. Groups such as `conint(...)`, `constr(...)`, `StringConstraints` and
+`Interval` count as their single constraints. Validator discovery uses Pydantic's
+private `__pydantic_decorators__` registry; CI tests it against the oldest
+supported Pydantic release. Dataclass `Annotated` metadata is not a validation
+rule unless the dataclass's own code enforces it, so modelfill does not impose it.
+
+### String patterns
+
+A string field's `pattern`, from `Field`, `constr` or `StringConstraints`, never
+reaches the solver. Pydantic itself decides what matches: every candidate goes
+through the field's own validation, so any pattern Pydantic accepts, under either
+`regex_engine`, means exactly what it means in your model. modelfill reads the
+pattern with Python's regex parser only to spell values from it, as
+[canonical values](#canonical-values) describes. A pattern it cannot read, such as
+one with Rust's `\p{L}`, is still checked; only the field's name-based candidates
+are tried for it.
+
+Because the solver then allows more values than Pydantic, never fewer, a pattern
+cannot cause a false proof of impossibility. A fixed value that breaks a pattern is
+a proven contradiction: `code='usd' conflict with code pattern '^[A-Z]{3}$'`. When
+the rules and a pattern cannot both hold, though, the result is
+`GenerationExhausted`, naming the pattern.
 
 ### Exact recognized validator language
 
@@ -231,10 +249,11 @@ is unsupported **validation logic**, for example loops, calls and string methods
 `try`, `with` and `match`, mutation, other exception classes and transformed
 return values. So are async, generator and wrapped validators, validators
 without retrievable source, and these Pydantic features: `before`, `plain` or
-`wrap` validators; legacy validators; Annotated validation callbacks;
-unrecognized field metadata such as patterns; transforming model config; custom
-initialization, core schema, attribute hooks and a custom `model_post_init`
-(private attributes are fine); and data-dependent default factories.
+`wrap` validators; legacy validators; Annotated validation callbacks; other
+field metadata, such as `StringConstraints(to_lower=True)`; transforming model
+config; custom initialization, core schema, attribute hooks and a custom
+`model_post_init` (private attributes are fine); and data-dependent default
+factories.
 
 In **strict** mode, unsupported validation logic raises `UnsupportedConstraint`
 when the filler is created. In **auto** mode it appears in
@@ -267,7 +286,7 @@ Arbitrary Python string behavior is not modeled.
 | --- | --- |
 | `UnsatisfiableConstraints` | A clean solver check proves the supported constraints plus canonical fixed assignments contradictory. No random preferences, blocked candidates or artificial bounds contribute to this result. When the solver isolates the conflict, the message names the fixed inputs, field constraints and validators involved, such as `start=17, duration=4` against `end <= 18` and `Meeting.check`. |
 | `UnsupportedConstraint` | Unsupported constructor shape, a required external field without a value, or unsupported validation in strict mode. |
-| `GenerationExhausted` | The bounded search did not find a normally validated object; also used for contradictions when unknown behavior or omitted unchecked defaults prevent an impossibility claim. |
+| `GenerationExhausted` | The bounded search did not find a normally validated object; also used for contradictions when unknown behavior or omitted unchecked defaults prevent an impossibility claim, or when the rules and a pattern cannot both hold. |
 | `SolverTimeout` | A solver query exhausted its budget: its fixed work limit, or the `timeout_ms` wall-clock safety net. Subclass of `SolverUnknown`. |
 | `SolverUnknown` | Z3 could not decide SAT/UNSAT for another reason, or did not say why. |
 
@@ -281,10 +300,10 @@ the same work across Z3 releases. `timeout_ms` is only a **per-query** wall-cloc
 safety net, not a deadline for a whole fill, which makes several queries per
 field.
 
-Diagnostics include field domains, defaults, each validator's extraction status,
-unsupported reasons, whether extracted predicates are active, the selection mode
-and proof eligibility. In a fallback model, successfully extracted validators
-report the status `guidance` rather than `modeled`.
+Diagnostics include field domains and patterns, defaults, each validator's
+extraction status, unsupported reasons, whether extracted predicates are active,
+the selection mode and proof eligibility. In a fallback model, successfully
+extracted validators report the status `guidance` rather than `modeled`.
 
 ## Canonical values
 
@@ -324,6 +343,21 @@ field's name; else `name_1` to `name_9`; else the name cut or padded with `_` to
 the allowed length nearest its own (a tie goes longer), then that with its last
 character replaced by `1` to `9`; else the strings the rules mention, then other
 fields' string values, so a confirmation field copies its password.
+
+With a [pattern](#string-patterns), every candidate must also match it. When none
+of the name's candidates does, modelfill spells a value from the pattern before
+trying strings from elsewhere. If a value can start with the name's first letter,
+it has the allowed length nearest the name's and follows the name as far as the
+pattern lets it; otherwise it is the shortest. Each other character is the first
+of `a`–`z`, `A`–`Z`, `0`–`9` that fits:
+
+| Field | Canonical value |
+| --- | --- |
+| `code: str = Field(pattern=r"^[A-Z]{3}$")` | `COD` |
+| `city: str = Field(pattern=r"^[A-Z][a-z]+$")` | `City` |
+| `sku: str = Field(pattern=r"^[A-Z]{3}-\d{4}$")` | `SKU-0000` |
+| `zip: str = Field(pattern=r"^\d{5}$")` | `00000` |
+| `phone: str = Field(pattern=r"^\+?[1-9]\d{1,14}$")` | `10` |
 
 `batch(count)` returns `count` distinct completions, compared on generated
 fields, in canonical order: the canonical completion, then the canonical

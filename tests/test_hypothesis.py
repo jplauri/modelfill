@@ -1,6 +1,7 @@
 """The Hypothesis strategy: Hypothesis draws some fields, modelfill solves the rest."""
 
 import random
+import re
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -86,3 +87,15 @@ class Tagged(BaseModel):
 @given(from_model(ModelFiller(Tagged, providers={UUID: lambda: UUID(int=7)})))
 def test_a_configured_filler_brings_its_providers(tagged):
     assert tagged.id == UUID(int=7)  # The provider beats the model's random default.
+
+
+class Coded(BaseModel):
+    code: str = Field(pattern=r"^[A-Z]{3}-\d{2}$")
+    count: int = Field(ge=0)
+
+
+def test_exploration_draws_values_that_match_patterns():
+    filler, rng = ModelFiller(Coded), random.Random(0)  # The sampler behind from_model.
+    codes = {filler._complete({}, 1, rng)[0].code for _ in range(50)}
+    assert all(re.fullmatch(r"[A-Z]{3}-\d{2}", code) for code in codes)
+    assert len(codes) > 40  # Spread out, unlike the canonical COD-00.

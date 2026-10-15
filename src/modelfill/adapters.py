@@ -16,8 +16,8 @@ from copy import deepcopy
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin, get_type_hints
 
-from annotated_types import Ge, Gt, Le, Lt, MaxLen, MinLen, MultipleOf
-from pydantic import BaseModel, ConfigDict
+from annotated_types import Ge, GroupedMetadata, Gt, Le, Lt, MaxLen, MinLen, MultipleOf
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.types import Strict
 from pydantic_core import PydanticUndefined
 
@@ -35,6 +35,7 @@ from .ir import (
     plain_enum,
     var,
 )
+from .patterns import Pattern
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -58,6 +59,7 @@ class FieldSpec:
     required: bool = True
     annotation: Any = None
     metadata: tuple[Any, ...] = ()  # Pydantic's constraints, for boring values of external fields.
+    pattern: Pattern | None = None  # A string field's pattern, checked outside the solver.
 
     def preferred(self) -> Any:
         """Evaluate an ordinary default once per fill; it is a preference."""
@@ -130,17 +132,38 @@ def _domain(annotation: Any) -> Domain | None:
 
 
 _SYMBOLS = {Gt: ">", Ge: ">=", Lt: "<", Le: "<="}
+# Pydantic's class for constraints that annotated-types lacks, such as a pattern.
+_GENERAL = type(Field(pattern="x").metadata[0])
+
+
+def _pattern(item: Any) -> Any:
+    """The pattern in Pydantic's general metadata, if nothing else there applies."""
+    if type(item) is not _GENERAL:
+        return None
+    settings = {
+        key for key, value in vars(item).items() if value is not None and value is not False
+    }
+    return item.pattern if settings == {"pattern"} else None
 
 
 def _metadata_constraints(
     name: str, domain: Domain, metadata: list[Any], unsupported: list[str]
-) -> list[tuple[str, Expr]]:
-    """A field's own constraints, as (label, rule) pairs."""
+) -> tuple[list[tuple[str, Expr]], Any]:
+    """A field's own constraints, as (label, rule) pairs, and its pattern, or None."""
     result: list[tuple[str, Expr]] = []
+    pattern = None
     expression = var(name, domain)
+    # Groups such as StringConstraints and Interval unpack into single constraints;
+    # constr() and conint() leave None for each option not given.
+    items = [
+        part
+        for item in metadata
+        if item is not None
+        for part in (item if isinstance(item, GroupedMetadata) else (item,))
+    ]
     # Pydantic keeps the last constraint of each kind, with Field() before Annotated[...]:
     # Field(ge=10) on an Annotated[int, Ge(0)] alias leaves ge=0 in force.
-    for item in {type(item): item for item in metadata}.values():
+    for item in {type(item): item for item in items}.values():
         if isinstance(item, Strict):
             continue  # All generated/fixed inputs already have their canonical type.
         if isinstance(item, (Gt, Ge, Lt, Le)) and domain.kind in TIME_TYPES:
@@ -184,11 +207,13 @@ def _metadata_constraints(
             symbol, operation = (">=", "ge") if minimum else ("<=", "le")
             length = node("len", expression, sort=INT)
             result.append((f"len({name}) {symbol} {value}", node(operation, length, const(value))))
+        elif domain.kind == "str" and (found := _pattern(item)) is not None:
+            pattern = found  # Only checked: it never transforms a value.
         else:
             unsupported.append(f"Field {name!r}: unsupported metadata {item!r}")
     if domain.nullable:  # Pydantic applies these constraints to non-None values only.
-        return [(label, node("or", node("isnone", expression), rule)) for label, rule in result]
-    return result
+        result = [(label, node("or", node("isnone", expression), rule)) for label, rule in result]
+    return result, pattern
 
 
 def _pydantic_validators(
@@ -253,6 +278,7 @@ _SAFE_CONFIG = {
     "cache_strings",
     "serialize_by_alias",
     "url_preserve_empty_path",
+    "regex_engine",  # Patterns are checked by Pydantic itself, with the model's engine.
 }
 
 
@@ -313,6 +339,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
             else config.get("validate_default", False)
         )
         rules: list[tuple[str, Expr]] = []
+        pattern = None
         if domain is not None:  # Pydantic itself validates values of external fields.
             metadata = list(info.metadata)
             if domain.kind == "str" and domain.choices is None:
@@ -322,8 +349,10 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
                     metadata.append(MinLen(shortest))
                 if longest is not None and not any(isinstance(m, MaxLen) for m in metadata):
                     metadata.append(MaxLen(longest))
-            rules = _metadata_constraints(name, domain, metadata, unsupported)
+            rules, regex = _metadata_constraints(name, domain, metadata, unsupported)
             constraints.extend(rules)
+            if regex is not None:
+                pattern = Pattern(regex, tuple(info.metadata), config.get("regex_engine"))
         # Pydantic skips field validation for an omitted default; that only matters
         # when the validation would have rejected the default.
         passes = (
@@ -346,6 +375,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
                 info.is_required(),
                 info.annotation,
                 tuple(info.metadata),
+                pattern,
             )
         )
     inputs = [field.input_name or field.name for field in fields]
