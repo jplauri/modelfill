@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+Most models now fill without arguments, and rules can read the fields of nested
+models.
 
 ### Added
 
