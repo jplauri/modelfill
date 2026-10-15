@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Fields the solver does not model get values too, so most models fill without
+  arguments. A nested model gets its own canonical completion; other types get
+  fixed, readable boring values, such as a zero UUID with the right version bits,
+  empty collections, `None` and `0.0`.
+- A dict for a nested model field fixes some of its fields, and modelfill
+  completes the rest: `fill(Order, customer={"age": 30})`.
+- `ModelFiller(providers=...)` supplies values for such fields by type or by field
+  path, such as `"customer.email"`. A path beats a type, and a provider beats the
+  model's default.
+- `explain()` reports where each such field's value comes from.
+
+### Fixed
+
+- A value that Pydantic converts for a field the solver does not model, such as
+  `total=5` for a float, is no longer rejected as a changed fixed value.
+
 ## 0.2.0
 
 modelfill is now convenience-first: fields a test does not fix get boring, valid,

@@ -30,7 +30,13 @@ Issues = "https://github.com/jplauri/modelfill/issues"
 hypothesis = ["hypothesis>=6.10.1,<7"]
 
 [dependency-groups]
-dev = ["pytest>=9,<10", "ruff==0.17.0", "ty==0.0.87", "hypothesis>=6.10.1,<7"]
+dev = [
+    "pytest>=9,<10",
+    "ruff==0.17.0",
+    "ty==0.0.87",
+    "hypothesis>=6.10.1,<7",
+    "email-validator>=2,<3",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.3,<0.12"]

@@ -128,7 +128,9 @@ assert booking.start == datetime(2025, 3, 1, 16)
 
 ```python
 fill(Model, **fixed_fields)
-ModelFiller(Model, *, mode="auto", max_attempts=100, work_limit=1_000_000, timeout_ms=1000)
+ModelFiller(
+    Model, *, mode="auto", max_attempts=100, work_limit=1_000_000, timeout_ms=1000, providers=None
+)
 filler.fill(**fixed_fields)
 filler.batch(count, **fixed_fields)
 filler.explain()  # fresh JSON-friendly dictionary
@@ -137,18 +139,18 @@ filler.explain()  # fresh JSON-friendly dictionary
 - All `fill()` keywords are **canonical model field names**, even if a model uses
   input aliases. Configuration lives on `ModelFiller`; fields named `mode`,
   `model`, `count`, or `self` work.
-- Fixed inputs are exact Python `int`, `bool`, `str`, `date`, naive `datetime`,
-  `timedelta`, Enum members, allowed Literal values, or `None` for optional
-  fields. There is no coercion: `"10"` or `True` for an `int` field, or an aware
-  datetime, raises `TypeError`. Unknown field names raise `ValueError`.
+- Fields modelfill solves take exact Python `int`, `bool`, `str`, `date`, naive
+  `datetime`, `timedelta`, Enum members, allowed Literal values, or `None` for
+  optional fields. There is no coercion: `"10"` or `True` for an `int` field, or an
+  aware datetime, raises `TypeError`. Unknown field names raise `ValueError`.
 - Fields of any other type (UUIDs, floats, lists, nested models, …) are
-  **external**: modelfill passes your value to the constructor unchanged, or
-  leaves the field to the model's default. A required external field without a
-  value raises `UnsupportedConstraint`. Validators that read external fields are
-  unsupported logic.
-- Explicit values are hard constraints. A returned object's fixed fields must
-  retain both their type and value; validator normalization cannot silently
-  replace them.
+  **external**: the solver does not model them. Your value goes to the
+  constructor, which may convert it as usual (`5` to `5.0`); without one, such a
+  field gets a value as described in
+  [fields the solver does not model](#fields-the-solver-does-not-model).
+  Validators that read external fields are unsupported logic.
+- Explicit values of solved fields are hard constraints. A returned object keeps
+  both their type and value; validator normalization cannot silently replace them.
 - Defaults are **preferences**, used when compatible with the solved constraints.
   A missing field's zero-argument default factory runs once per fill call.
   Standard defaults are copied. A conflicting default can be replaced.
@@ -175,7 +177,7 @@ filler.explain()  # fresh JSON-friendly dictionary
 | --- | --- |
 | Pydantic | v2 `BaseModel`, inherited validators, scalar fields |
 | Dataclasses | Standard dataclasses, including frozen and slotted classes; pure `__post_init__`, when the generated `__init__` calls it (a subclass that is not decorated again never runs its own) |
-| Types | Exact `int`, `bool`, `str`, `date`, naive `datetime`, `timedelta`; ordinary `Enum`, `IntEnum`, `StrEnum`; homogeneous `Literal` subsets; any of these `\| None` (`Optional`, or `None` inside a `Literal`); other types as external fields |
+| Types | Exact `int`, `bool`, `str`, `date`, naive `datetime`, `timedelta`; ordinary `Enum`, `IntEnum`, `StrEnum`; homogeneous `Literal` subsets; any of these `\| None` (`Optional`, or `None` inside a `Literal`); other types as [external fields](#fields-the-solver-does-not-model) |
 | Numeric metadata | Integer, date, datetime and timedelta `Field(gt, ge, lt, le)`, respecting strict and inclusive bounds; integer `Field(multiple_of)`; on optional fields they constrain non-None values, as in Pydantic |
 | String metadata | `Field(min_length, max_length)` and global `str_min_length` / `str_max_length` |
 | Model validators | Instance `@model_validator(mode="after")`, returning the original `self` on successful paths |
@@ -217,7 +219,7 @@ follow Python's parsed precedence, including operand-returning `and` and `or`.
 
 ### Unsupported features and fallback
 
-Field types modelfill cannot generate (floats, containers, nested models, UUIDs,
+Field types the solver does not model (floats, containers, nested models, UUIDs,
 aware datetimes, other unions, mixed-type Literals, Flags, custom Enum behavior,
 …) become external fields, described above. Unsupported **constructor shapes**
 fail explicitly: Pydantic dataclasses, dataclass `InitVar` / `init=False`
@@ -345,6 +347,68 @@ uv run python -m benchmarks.benchmark --count 100 --repeat 5
 Measured results, the design and comparisons with Polyfactory and CrossHair are
 in [the design document](https://github.com/jplauri/modelfill/blob/master/docs/architecture.md).
 
+## Fields the solver does not model
+
+A field of any other type, such as a UUID, a float, a list or a nested model, takes
+its value from the first of these:
+
+1. your value. For a nested model, a dict fixes some of its fields and modelfill
+   completes the rest;
+2. a provider, keyed by field path or by type; a path beats a type;
+3. the model's own default;
+4. for a nested model, its own canonical completion; otherwise a boring value.
+
+```python
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+from modelfill import ModelFiller, fill
+
+
+class Customer(BaseModel):
+    id: UUID
+    name: str
+    age: int = Field(ge=18)
+
+
+class Order(BaseModel):
+    id: UUID
+    customer: Customer
+    total: float = Field(ge=0)
+    tags: list[str]
+    quantity: int = Field(ge=1)
+
+
+order = fill(Order)  # No arguments needed: every field gets a valid, boring value.
+assert fill(Order, customer={"age": 30}).customer.age == 30
+filler = ModelFiller(
+    Order, providers={UUID: lambda: UUID(int=7), "customer.id": lambda: UUID(int=9)}
+)
+assert (filler.fill().id, filler.fill().customer.id) == (UUID(int=7), UUID(int=9))
+```
+
+| Field | Boring value |
+| --- | --- |
+| `X \| None`, `Any` | `None` |
+| `list`, `tuple[X, ...]`, `set`, `dict` | empty; a list or tuple with `min_length` repeats its element's boring value |
+| `tuple[int, str]` | each element's boring value: `(0, "")` |
+| `float`, `Decimal` | `0`, or the whole number nearest 0 that the bounds allow (`gt=0` gives `1.0`) |
+| `int \| str` and other unions | the first member's boring value |
+| `UUID`, `UUID4`, … | `00000000-0000-4000-8000-000000000000`, with the version bits the annotation asks for |
+| `bytes`, `time`, `AwareDatetime` | `b""`, `time(0, 0)`, 2025-01-01 00:00 UTC |
+| `EmailStr`, URLs, `SecretStr` | `user@example.com`, `https://example.com/`, `SecretStr("")` |
+| Flags, unusual enums, mixed `Literal` | the first member |
+
+A provider is a zero-argument callable, run once per fill like a default factory.
+Providers apply only to fields the solver does not model, so one that targets a
+solved field, or a path that does not exist, fails when the filler is created.
+A field with no value from any source, such as one of an arbitrary class, raises
+`UnsupportedConstraint`; pass a value or add a provider. So do `PastDate` and
+`FutureDate`, whose validity depends on the clock. If Pydantic rejects a boring
+value, for example because of a custom validator, `GenerationExhausted` names
+the field at once. Validators that read these fields remain unsupported logic,
+so a model with one falls back to the bounded search.
+
 ## Exploration with Hypothesis
 
 Canonical values are for tests that need *a* valid object. To hunt bugs, explore
@@ -353,8 +417,8 @@ with `modelfill.hypothesis.from_model`, a Hypothesis strategy that needs the
 required external fields default to `st.from_type`, and modelfill solves the rest
 from the validators. Unlike `fill()`, it picks those values at random, often at
 the edges of their feasible ranges, where bugs tend to hide. To set `mode`,
-`max_attempts`, `work_limit` or `timeout_ms`, pass a configured `ModelFiller` in
-place of the class, so options never collide with field names:
+`max_attempts`, `work_limit`, `timeout_ms` or `providers`, pass a configured
+`ModelFiller` in place of the class, so options never collide with field names:
 
 ```python
 from datetime import datetime, timedelta

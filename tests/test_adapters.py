@@ -376,8 +376,6 @@ def test_unsupported_types_become_external_fields(annotation):
     adapter = introspect(Unsupported)
     assert adapter.fields[0].domain is None
     adapter.check_fixed({"value": object()})  # The constructor validates external values.
-    with pytest.raises(UnsupportedConstraint, match="cannot generate value"):
-        adapter.check_fixed({})
 
 
 def test_optional_literal_and_time_domains():

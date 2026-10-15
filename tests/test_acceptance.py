@@ -713,10 +713,9 @@ def test_external_fields_pass_through_while_the_rest_is_solved():
     assert filler.explain()["fields"]["id"] == {
         "type": "external",
         "choices": None,
-        "default": "required input",
+        "default": "boring value",
     }
-    with pytest.raises(UnsupportedConstraint, match="cannot generate id"):
-        filler.fill(price=100)
+    assert filler.fill(price=100).id == UUID("00000000-0000-4000-8000-000000000000")
 
 
 class Packs(BaseModel):
