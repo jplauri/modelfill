@@ -387,7 +387,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
             rules, regex = _metadata_constraints(name, domain, metadata, unsupported)
             constraints.extend(rules)
             if regex is not None:
-                pattern = Pattern(regex, tuple(info.metadata), config.get("regex_engine"))
+                pattern = Pattern(regex, config.get("regex_engine"))
         # Pydantic skips field validation for an omitted default; that only matters
         # when the validation would have rejected the default.
         passes = (

@@ -47,6 +47,10 @@
   schema hook, is unsupported logic, as a field validator of that field already
   was. On a required nested model it could replace the object the parent's rules
   read, so modelfill claimed models impossible that Pydantic accepts.
+- Candidates for a field with a pattern are checked against the pattern alone. The
+  field's other metadata ran there too, without the model's data, so a validator
+  that reads `info.data` raised `TypeError`, and one that uppercases rejected
+  every value.
 
 ## 0.3.0
 

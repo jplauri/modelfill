@@ -8,6 +8,7 @@ from typing import Annotated
 import pytest
 from annotated_types import Interval
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -182,6 +183,28 @@ def test_long_fixed_lengths_are_reached():
     assert fill(Digest).sha512 == "a" * 128
     explored = ModelFiller(Digest)._complete({}, 1, random.Random(0))[0]  # As from_model does.
     assert len(explored.sha512) == 128
+
+
+def needs_count(code, info):
+    if info.data["count"] < 0:
+        raise ValueError("the count must be nonnegative")
+    return code
+
+
+class Counted(BaseModel):
+    count: int
+    code: Annotated[str, AfterValidator(needs_count)] = Field(pattern=r"^[a-z]+$")
+
+
+class Shouted(BaseModel):
+    code: Annotated[str, AfterValidator(str.upper)] = Field(pattern=r"^[a-z]+$")
+
+
+def test_candidates_are_checked_against_the_pattern_alone():
+    # The field's other metadata once ran there too: without the model's data, and
+    # requiring the uppercased value to equal the input.
+    assert fill(Counted) == Counted(count=0, code="code")
+    assert fill(Shouted).code == "CODE"
 
 
 DEEP = sys.getrecursionlimit() + 100  # One character per level once overflowed the stack.

@@ -230,12 +230,14 @@ character of a canonical value pinned by probes, every pattern using `\d` (71
 Unicode digit ranges) exhausted the default work limit, and the other realistic
 patterns tried took 22 ms to 1.5 s per value. Instead the solver ignores the
 pattern and therefore allows more values than Pydantic does, never fewer, so a
-proof of impossibility stays sound. Each candidate goes through the field's own
-Pydantic validation, which decides exactly, for either regex engine, flags and
-compiled patterns included. A fixed value that fails it is a proven
-contradiction, unless unsupported logic, such as a before validator, could
-change the value first, or the value comes from a given nested instance, which
-is used as it is. When the rules and a pattern cannot both hold, the search ends
+proof of impossibility stays sound. Pydantic checks each candidate against the
+pattern alone, which decides exactly, for either regex engine, flags and compiled
+patterns included. The field's other metadata, such as a validator that reads
+`info.data` or one that uppercases, runs only in the real constructor, which gives
+it the model's data and keeps what it returns. A fixed value that fails the
+pattern is a proven contradiction, unless unsupported logic, such as a before
+validator, could change the value first, or the value comes from a given nested
+instance, which is used as it is. When the rules and a pattern cannot both hold, the search ends
 in `GenerationExhausted`; proving such conflicts would need the pattern in Z3.
 
 Values are spelled in Python, in well under 3 ms for the same patterns. Python's

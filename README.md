@@ -200,10 +200,10 @@ rule unless the dataclass's own code enforces it, so modelfill does not impose i
 ### String patterns
 
 A string field's `pattern`, from `Field`, `constr` or `StringConstraints`, never
-reaches the solver. Pydantic itself decides what matches: every candidate goes
-through the field's own validation, so any pattern Pydantic accepts, under either
-`regex_engine`, means exactly what it means in your model. modelfill reads the
-pattern with Python's regex parser only to spell values from it, as
+reaches the solver. Pydantic itself decides what matches: every candidate is
+checked against the pattern by Pydantic, so any pattern Pydantic accepts, under
+either `regex_engine`, means exactly what it means in your model. modelfill reads
+the pattern with Python's regex parser only to spell values from it, as
 [canonical values](#canonical-values) describes. A pattern it cannot read, such as
 one with Rust's `\p{L}`, is still checked; only the field's name-based candidates
 are tried for it.
