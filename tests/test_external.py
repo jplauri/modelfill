@@ -7,6 +7,7 @@ from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 import pytest
+from annotated_types import Interval
 from pydantic import (
     UUID1,
     UUID4,
@@ -17,6 +18,7 @@ from pydantic import (
     EmailStr,
     Field,
     HttpUrl,
+    conlist,
     field_validator,
 )
 
@@ -199,6 +201,15 @@ def test_each_batch_member_gets_its_own_provider_values():
     ids = iter(range(100))
     orders = ModelFiller(Order, providers={UUID: lambda: UUID(int=next(ids))}).batch(3)
     assert [(order.id.int, order.customer.id.int) for order in orders] == [(0, 1), (2, 3), (4, 5)]
+
+
+class Grouped(BaseModel):
+    tags: conlist(int, min_length=2)
+    ratio: Annotated[float, Interval(ge=5, le=9)]
+
+
+def test_boring_values_meet_grouped_constraints():
+    assert fill(Grouped) == Grouped(tags=[0, 0], ratio=5.0)
 
 
 class Unbounded(BaseModel):

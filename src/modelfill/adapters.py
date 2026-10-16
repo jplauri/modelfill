@@ -11,7 +11,7 @@ import dataclasses
 import inspect
 import math
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from copy import deepcopy
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin, get_type_hints
@@ -162,6 +162,19 @@ def _runs_code(item: Any) -> bool:
     )
 
 
+def _flatten(metadata: Iterable[Any]) -> list[Any]:
+    """Metadata as Pydantic reads it: groups such as StringConstraints, Interval and Len
+    unpacked into their single items, at any depth; constr() and conint() leave None
+    for each option not given."""
+    items: list[Any] = []
+    for item in metadata:
+        if isinstance(item, GroupedMetadata):
+            items += _flatten(item)
+        elif item is not None:
+            items.append(item)
+    return items
+
+
 def _pattern(item: Any) -> Any:
     """The pattern in Pydantic's general metadata, if nothing else there applies."""
     if type(item) is not _GENERAL:
@@ -175,21 +188,14 @@ def _pattern(item: Any) -> Any:
 def _metadata_constraints(
     name: str, domain: Domain, metadata: list[Any], unsupported: list[str]
 ) -> tuple[list[tuple[str, Expr]], Any]:
-    """A field's own constraints, as (label, rule) pairs, and its pattern, or None."""
+    """A field's own constraints, as (label, rule) pairs, and its pattern, or None,
+    from its flattened metadata."""
     result: list[tuple[str, Expr]] = []
     pattern = None
     expression = var(name, domain)
-    # Groups such as StringConstraints and Interval unpack into single constraints;
-    # constr() and conint() leave None for each option not given.
-    items = [
-        part
-        for item in metadata
-        if item is not None
-        for part in (item if isinstance(item, GroupedMetadata) else (item,))
-    ]
     # Pydantic keeps the last constraint of each kind, with Field() before Annotated[...]:
     # Field(ge=10) on an Annotated[int, Ge(0)] alias leaves ge=0 in force.
-    for item in {type(item): item for item in items}.values():
+    for item in {type(item): item for item in metadata}.values():
         if isinstance(item, Strict):
             continue  # All generated/fixed inputs already have their canonical type.
         if isinstance(item, (Gt, Ge, Lt, Le)) and domain.kind in TIME_TYPES:
@@ -366,6 +372,9 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         )
         rules: list[tuple[str, Expr]] = []
         pattern = None
+        # Unpacked before anything reads it, so a group's own length limits override
+        # the global ones, as in Pydantic.
+        metadata = _flatten(info.metadata)
         if domain is None:
             # Pydantic validates an external field itself, but code in its metadata could
             # replace a value that a rule reads, a required nested model's say, so it is
@@ -376,7 +385,6 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
                 if _runs_code(item)
             ]
         else:
-            metadata = list(info.metadata)
             if domain.kind == "str" and domain.choices is None:
                 # A field's own length limit overrides the global configuration.
                 shortest, longest = config.get("str_min_length"), config.get("str_max_length")
@@ -409,7 +417,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
                 unchecked,
                 info.is_required(),
                 info.annotation,
-                tuple(info.metadata),
+                tuple(metadata),
                 pattern,
             )
         )

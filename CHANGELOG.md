@@ -58,6 +58,11 @@
   search.
 - An infinite bound on an external number, such as `Field(ge=float("-inf"))`, no
   longer makes `fill()` and `explain()` raise `OverflowError`.
+- A group's own length limits, as in `StringConstraints(min_length=2,
+  max_length=3)`, override the global `str_min_length` and `str_max_length`, as in
+  Pydantic. The globals used to replace them, so modelfill claimed such models
+  impossible. Boring values meet grouped constraints too, as for
+  `conlist(int, min_length=2)`.
 
 ## 0.3.0
 

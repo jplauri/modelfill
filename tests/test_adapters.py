@@ -11,6 +11,7 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
+    StringConstraints,
     field_validator,
     model_validator,
 )
@@ -258,6 +259,16 @@ def test_global_string_lengths_do_not_apply_to_literals():
     adapter = introspect(Lengths)
     assert [label for label, _ in adapter.constraints] == ["len(name) >= 1", "len(name) <= 4"]
     assert adapter.construct({"name": "a", "choice": "x"}).choice == "x"
+
+
+def test_a_group_overrides_global_string_lengths():
+    class Lengths(BaseModel):
+        model_config = ConfigDict(str_min_length=10, str_max_length=1)
+        name: Annotated[str, StringConstraints(min_length=2, max_length=3)]
+
+    # The globals once joined the group's limits: len >= 10 and len <= 3, impossible.
+    adapter = introspect(Lengths)
+    assert [label for label, _ in adapter.constraints] == ["len(name) >= 2", "len(name) <= 3"]
 
 
 def test_global_string_lengths_set_to_none_impose_nothing():
