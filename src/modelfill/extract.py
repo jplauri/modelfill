@@ -26,6 +26,10 @@ _ZERO = {"int": 0, "str": "", "timedelta": datetime.timedelta(0)}
 # Types of named constants (module globals or closures) read into validators.
 _CONSTANT_TYPES = (int, bool, str, type(None), *TIME_TYPES.values())
 
+# A name with no constant value: a parameter, a local or an unknown name. Unlike
+# None, which is a real constant, it is never read as a value.
+_UNRESOLVED = object()
+
 _OPERATORS = {
     ast.Add: "add",
     ast.Sub: "sub",
@@ -110,7 +114,7 @@ class _Analyzer:
         return UnsupportedConstraint(f"{name}{location}: {reason}")
 
     def resolve(self, name: str) -> Any:
-        return None if name in self.local_names else self.names.get(name)
+        return _UNRESOLVED if name in self.local_names else self.names.get(name, _UNRESOLVED)
 
     def guarded(self, analyze: Callable[..., Any], *args: Any) -> tuple[Any, Expr]:
         """Analyze in isolation; also return the condition for it not to raise."""

@@ -18,6 +18,10 @@
 
 - When the search runs out of readable strings, the error keeps its usual details,
   such as the unsupported logic and the last rejection.
+- A validator that reads a parameter such as `self`, `info` or `cls` as a bare
+  name, or an unknown name, is unsupported logic. Such a name used to read as
+  `None`, so `if info is None: raise ValueError(...)` counted as always rejecting
+  and modelfill claimed the model impossible.
 
 ## 0.3.0
 

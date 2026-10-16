@@ -428,6 +428,32 @@ def unsupported_unicode(self):
     return self
 
 
+# A bare parameter or unknown name is not the constant None: these once read as
+# always rejecting, a false proof of impossibility.
+def self_is_none(self):
+    if self is None:
+        raise ValueError("invalid")
+    return self
+
+
+def falsy_self(self):
+    if not self:
+        raise ValueError("invalid")
+    return self
+
+
+def info_is_none(self, info):
+    if info is None:
+        raise ValueError("invalid")
+    return self
+
+
+def unknown_name(self):
+    if undefined_limit is None:  # noqa: F821
+        raise ValueError("invalid")
+    return self
+
+
 @pytest.mark.parametrize(
     "validator",
     [
@@ -446,6 +472,10 @@ def unsupported_unicode(self):
         mixed_boolean_values,
         try_statement,
         unsupported_unicode,
+        self_is_none,
+        falsy_self,
+        info_is_none,
+        unknown_name,
     ],
 )
 def test_entire_unsupported_validator_is_rejected(validator):
