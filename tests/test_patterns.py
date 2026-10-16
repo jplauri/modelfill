@@ -207,6 +207,25 @@ def test_candidates_are_checked_against_the_pattern_alone():
     assert fill(Shouted).code == "CODE"
 
 
+class Loud(BaseModel):
+    code: str = Field(pattern=r"^[a-z]+$")
+
+    @field_validator("code")
+    @classmethod
+    def shout(cls, code):  # Unsupported: it changes the value.
+        return code.upper()
+
+    @model_validator(mode="after")
+    def check(self):  # As guidance, code == "CODE", which the pattern rules out.
+        if self.code != "CODE":
+            raise ValueError("the code must be CODE")
+        return self
+
+
+def test_guidance_that_leaves_no_candidate_gives_way():
+    assert fill(Loud).code == "CODE"  # From the unguided candidate "code".
+
+
 DEEP = sys.getrecursionlimit() + 100  # One character per level once overflowed the stack.
 
 

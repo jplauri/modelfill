@@ -264,7 +264,8 @@ candidate bounds; normal construction still runs every original validator. A
 candidate it rejects is excluded and the next canonical candidate is tried.
 Attempts alternate between preferring the guidance and ignoring it, so
 misleading guidance cannot starve the search, and the sequence is the same on
-every run. It tries at most `max_attempts` candidates and never claims UNSAT in
+every run. Guidance that leaves no candidate at all, such as a value its pattern
+rules out, is dropped for the rest of the call. It tries at most `max_attempts` candidates and never claims UNSAT in
 this fallback mode. This bounded search can miss valid solutions, especially
 narrow conditions or transformations.
 

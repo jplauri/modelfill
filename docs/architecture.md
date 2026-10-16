@@ -81,7 +81,9 @@ never reports UNSAT. This accounts for an unknown hook potentially transforming
 a value before a supported validator runs. Guidance is preferred on alternate
 attempts and only after a satisfiability check, so wrong guidance can waste
 attempts but never rules out a candidate for good or reaches a verdict; the
-original constructor decides. Diagnostics report both individual extraction results and
+original constructor decides. The check cannot see a pattern, so guidance may
+fit and still leave no matching string; that attempt then goes without it, and so
+do the rest, since excluding more candidates never brings one back. Diagnostics report both individual extraction results and
 whether validator constraints are active.
 
 An UNSAT verdict also explains itself. Only on that path, modelfill rebuilds

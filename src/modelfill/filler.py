@@ -318,6 +318,7 @@ class ModelFiller[T]:
         seen: set[tuple[Any, ...]] = set()  # The results' generated values.
         failures = 0
         stuck = ""  # Why no further candidate could be chosen, if that ended the search.
+        guidance = bool(self._compiled.guidance)  # Dropped once it leaves no candidate.
         with solver.session(solved):
             # This first check has no preferences or candidate exclusions.
             if not solver.check():
@@ -336,16 +337,22 @@ class ModelFiller[T]:
             while len(results) < count and failures < self.max_attempts:
                 if (results or failures) and not solver.check():
                     break  # Every remaining candidate has been tried.
-                # Alternate, so guidance misled by an unknown hook cannot starve the search.
-                guided = failures % 2 == 0
-                try:
-                    if rng is None:
-                        candidate = solver.canonical(solved, defaults, guided=guided)
-                    else:
-                        candidate = solver.candidate(solved, defaults, rng, guided=guided)
-                except GenerationExhausted as exc:
-                    stuck = str(exc)  # No readable or matching string remains, say.
+                # Alternate, so guidance misled by an unknown hook cannot starve the search,
+                # and go without it when it leaves no candidate at all.
+                for guided in (True, False) if guidance and failures % 2 == 0 else (False,):
+                    try:
+                        if rng is None:
+                            candidate = solver.canonical(solved, defaults, guided=guided)
+                        else:
+                            candidate = solver.candidate(solved, defaults, rng, guided=guided)
+                        break
+                    except GenerationExhausted as exc:
+                        stuck = str(exc)  # No readable or matching string remains, say.
+                        if guided:  # Excluding more candidates could never bring one back.
+                            guidance = False
+                else:
                     break
+                stuck = ""
                 solver.block(candidate)  # Retries and batch members must differ.
                 try:
                     instance = self._construct(inputs, candidate)

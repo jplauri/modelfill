@@ -51,6 +51,9 @@
   field's other metadata ran there too, without the model's data, so a validator
   that reads `info.data` raised `TypeError`, and one that uppercases rejected
   every value.
+- In fallback mode, guidance that leaves no candidate at all, such as a value its
+  pattern rules out, gives way to an unguided candidate instead of ending the
+  search.
 
 ## 0.3.0
 
