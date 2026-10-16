@@ -359,8 +359,8 @@ of `a`–`z`, `A`–`Z`, `0`–`9` that fits:
 | `zip: str = Field(pattern=r"^\d{5}$")` | `00000` |
 | `phone: str = Field(pattern=r"^\+?[1-9]\d{1,14}$")` | `10` |
 
-`batch(count)` returns `count` distinct completions, compared on generated
-fields, in canonical order: the canonical completion, then the canonical
+`batch(count)` returns `count` distinct completions, compared on the validated
+objects' generated fields, in canonical order: the canonical completion, then the canonical
 completion of what remains once each earlier one is excluded. It raises
 `GenerationExhausted` when fewer distinct valid completions exist or can be found
 within the budget.
@@ -369,8 +369,8 @@ Canonical values are stable within a release but **not across versions**: a late
 release may choose differently. A test should fix every field it asserts on.
 
 The solver's hard domains have no arbitrary integer or string-length bounds.
-Each canonical assignment is cached per fixed inputs and default values, so a
-repeated fill only reruns construction. Each thread owns a separate Z3 context and
+A canonical assignment that validates on the first try is cached per fixed inputs
+and default values, so a repeated fill only reruns construction. Each thread owns a separate Z3 context and
 solver; immutable compiled information is shared, and compiled models and the
 convenience `fill()` fillers live in bounded caches. Treat model definitions and
 the Enum classes and constants their validators read as immutable after first
@@ -389,7 +389,8 @@ A field of any other type, such as a UUID, a float, a list or a nested model, ta
 its value from the first of these:
 
 1. your value. For a nested model, a dict fixes some of its fields and modelfill
-   completes the rest;
+   completes the rest; an instance is used as it is, so it must keep its own
+   model's rules, which Pydantic does not check again;
 2. a provider, keyed by field path or by type; a path beats a type;
 3. the model's own default;
 4. for a nested model, its canonical completion; otherwise a boring value. A
@@ -437,28 +438,31 @@ assert (filler.fill().id, filler.fill().customer.id) == (UUID(int=7), UUID(int=9
 | `EmailStr`, URLs, `SecretStr` | `user@example.com`, `https://example.com/`, `SecretStr("")` |
 | Flags, unusual enums, mixed `Literal` | the first member |
 
-A provider is a zero-argument callable, run once per fill like a default factory.
+A provider is a zero-argument callable, run once per returned object like a default
+factory, so each batch member gets its own values; one that provides a required
+nested model, which is solved with its parent, fixes it for the whole call.
 Providers apply only to fields the solver does not model, so one that targets a
 solved field, or a path that does not exist, fails when the filler is created.
 A field with no value from any source, such as one of an arbitrary class, raises
 `UnsupportedConstraint`; pass a value or add a provider. So do `PastDate` and
-`FutureDate`, whose validity depends on the clock. If Pydantic rejects a boring
-value, for example because of a custom validator, `GenerationExhausted` names
-the field at once. Validators that read these fields remain unsupported logic,
-so a model with one falls back to the bounded search; so does a rule that reads
-an optional nested model or one with a default, and any unsupported logic inside
-a nested model makes the whole object fall back.
+`FutureDate`, whose validity depends on the clock. If Pydantic keeps rejecting a
+boring value, for example because of a custom validator, the search ends in
+`GenerationExhausted`, which names the field. Validators that read these fields
+remain unsupported logic, so a model with one falls back to the bounded search;
+so does a rule that reads an optional nested model or one with a default, and any
+unsupported logic inside a nested model makes the whole object fall back.
 
 ## Exploration with Hypothesis
 
 Canonical values are for tests that need *a* valid object. To hunt bugs, explore
 with `modelfill.hypothesis.from_model`, a Hypothesis strategy that needs the
 `hypothesis` extra. Pass strategies for the fields you want Hypothesis to drive;
-required external fields default to `st.from_type`, and modelfill solves the rest
-from the validators. Unlike `fill()`, it picks those values at random, often at
-the edges of their feasible ranges, where bugs tend to hide. To set `mode`,
-`max_attempts`, `work_limit`, `timeout_ms` or `providers`, pass a configured
-`ModelFiller` in place of the class, so options never collide with field names:
+required external fields without a provider default to `st.from_type`, and
+modelfill solves the rest from the validators. Unlike `fill()`, it picks those
+values at random, often at the edges of their feasible ranges, where bugs tend to
+hide. To set `mode`, `max_attempts`, `work_limit`, `timeout_ms` or `providers`,
+pass a configured `ModelFiller` in place of the class, so options never collide
+with field names:
 
 ```python
 from datetime import datetime, timedelta

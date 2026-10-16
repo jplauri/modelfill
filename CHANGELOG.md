@@ -18,6 +18,31 @@
 
 - When the search runs out of readable strings, the error keeps its usual details,
   such as the unsupported logic and the last rejection.
+- A validator that reads a parameter such as `self`, `info` or `cls` as a bare
+  name, or an unknown name, is unsupported logic. Such a name used to read as
+  `None`, so `if info is None: raise ValueError(...)` counted as always rejecting
+  and modelfill claimed the model impossible.
+- A reused filler, including the cached one behind `fill()`, no longer returns an
+  earlier call's values when external values decide which candidate validates:
+  only a completion that validates on the first try is cached.
+- A given nested instance that breaks its own model's rules, such as `Account()`
+  keeping an unchecked default `balance=-1` despite `ge=0`, raises `ValueError`
+  instead of a false `UnsatisfiableConstraints`. Pydantic does not check such an
+  instance again, but modelfill solves with its rules.
+- `batch()` compares the validated objects, so a validator that normalizes
+  different candidates to the same value no longer yields duplicates.
+- When Pydantic rejects a value modelfill chose for an external field, the search
+  goes on instead of giving up: a validator of that field may read solved fields
+  through `info.data`. If the search ends, the error still names the field.
+- `from_model` leaves a required external field to its configured provider instead
+  of drawing it with `st.from_type`, which overrode the provider.
+- Providers run once per returned object, as documented, so each `batch()` member
+  gets its own values: a `uuid4` provider no longer gives every member the same id.
+  Boring values and nested completions are fresh per member too.
+- A pattern value longer than Python's recursion limit, as for `^a{1500}$`, is
+  spelled instead of raising `RecursionError`.
+- An empty validation alias, `Field(alias="")`, is passed as such instead of
+  being mistaken for no alias.
 
 ## 0.3.0
 

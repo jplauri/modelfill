@@ -197,9 +197,10 @@ class ModelFiller[T]:
     preferences, used when compatible with the rules and fixed values.
 
     ``providers`` maps a type, or a field path such as ``"customer.email"``, to a
-    zero-argument callable for fields the solver does not model. A path beats a type,
-    and a provider beats the model's default; otherwise such a field gets a boring
-    value, and a nested model its own canonical completion.
+    zero-argument callable for fields the solver does not model, run once per
+    returned object. A path beats a type, and a provider beats the model's default;
+    otherwise such a field gets a boring value, and a nested model its own canonical
+    completion.
     """
 
     def __init__(
@@ -299,17 +300,22 @@ class ModelFiller[T]:
                 ):
                     defaults[name] = value
         solver = self._solver()
-        # A canonical completion depends only on these, so repeated fills reuse it.
+        # The first candidate depends only on these, and whenever it validates a fresh
+        # search returns it, so repeated fills reuse it. A later candidate may owe its
+        # turn to external values, which the key leaves out, so it is never kept.
+        # ponytail: a model whose first candidate fails searches on every fill; caching
+        # the candidate sequence would avoid that if fallback models get slow.
         key = (frozenset(solved.items()), tuple(defaults.items()))
         cache = self._local.cache
         if rng is None and count == 1 and key in cache:
             try:
                 return [self._construct(inputs, cache[key])]
             except (ValueError, AssertionError):
-                del cache[key]  # Validation is meant to be deterministic; search again.
+                pass  # These external values reject it; the search goes past it.
         last_error: Exception | None = None
         omitted = [name for name in self._compiled.unchecked if name not in solved]
         results: list[T] = []
+        seen: set[tuple[Any, ...]] = set()  # The results' generated values.
         failures = 0
         stuck = ""  # Why no further candidate could be chosen, if that ended the search.
         with solver.session(solved):
@@ -342,28 +348,26 @@ class ModelFiller[T]:
                     break
                 solver.block(candidate)  # Retries and batch members must differ.
                 try:
-                    results.append(self._construct(inputs, candidate))
+                    instance = self._construct(inputs, candidate)
                 except (ValueError, AssertionError) as exc:
-                    # Retrying changes only solved fields, so it cannot fix a value modelfill
-                    # chose for another field.
-                    # Only this model's own errors name its fields; a nested one's do not.
-                    own = isinstance(exc, ValidationError) and exc.title == self.model.__name__
-                    if own and (
-                        rejected := chosen
-                        & {error["loc"][0] for error in exc.errors() if error["loc"]}
-                    ):
-                        raise GenerationExhausted(
-                            f"{self.model.__name__}: Pydantic rejected the value chosen for "
-                            f"{', '.join(sorted(map(str, rejected)))}; pass a value or add a "
-                            f"provider: {exc}"
-                        ) from exc
+                    # Even an error at a value chosen for another field may depend on the
+                    # solved fields, through info.data, so the search goes on.
                     failures, last_error = failures + 1, exc
                     continue
-                failures = 0
-                if rng is None and count == 1:
+                # Unsupported logic can turn different candidates into equal objects.
+                generated = tuple(_get(instance, name) for name in candidate)
+                if generated in seen:
+                    failures += 1
+                    continue
+                seen.add(generated)
+                results.append(instance)
+                if rng is None and count == 1 and not failures:
                     if len(cache) >= 256:  # Bounded: forget the oldest assignment.
                         del cache[next(iter(cache))]
                     cache[key] = candidate
+                failures = 0
+                if len(results) < count:  # Each member gets its own provider values.
+                    inputs = self._refresh(fixed_fields, inputs)
         if len(results) == count:
             return results
         found = f"found {len(results)} of {count} distinct completions; " if count > 1 else ""
@@ -376,6 +380,14 @@ class ModelFiller[T]:
         message = f"{self.model.__name__}: {found}{reason}"
         if self._compiled.unsupported:
             message += "; unsupported logic: " + "; ".join(self._compiled.unsupported)
+        # Only this model's own errors name its fields; a nested one's do not.
+        if isinstance(last_error, ValidationError) and last_error.title == self.model.__name__:
+            locations = {error["loc"][0] for error in last_error.errors() if error["loc"]}
+            if rejected := chosen & locations:
+                message += (
+                    f"; Pydantic rejected the value chosen for "
+                    f"{', '.join(sorted(map(str, rejected)))}; pass a value or add a provider"
+                )
         if last_error is not None:
             message += f"; last rejection: {last_error}"
         raise GenerationExhausted(message) from last_error
@@ -429,7 +441,9 @@ class ModelFiller[T]:
         """A solved nested model's inputs by path, such as "customer.age".
 
         A dict fixes some of its fields, as in any fill. A given instance is used as it
-        is, and its solved values become fixed, so this model's rules see them.
+        is, and its solved values become fixed, so this model's rules see them. It must
+        keep its own model's rules too: Pydantic does not check them again, but this
+        model's solver holds its values to them.
         """
         filler = self._nested_filler(name, model)
         if given is MISSING or isinstance(given, dict):
@@ -441,6 +455,18 @@ class ModelFiller[T]:
         for path, value in values.items():
             if not filler._compiled.domains[path].accepts(value):
                 raise TypeError(f"{name}.{path} of the given {model.__name__} is {value!r}")
+        # One that breaks them, by keeping an unchecked default say, is an input error,
+        # not a contradiction.
+        solver = filler._solver()
+        with solver.session(values):
+            if not solver.check():
+                conflict = solver.conflict(values, filler._compiled.constraints)
+                raise ValueError(
+                    f"{name}: the given instance breaks its own rules, which Pydantic does "
+                    f"not check again but modelfill solves with "
+                    f"({_contradiction(model.__name__, *conflict)}); "
+                    "pass a dict or a valid instance"
+                )
         return {name: given} | {f"{name}.{path}": value for path, value in values.items()}
 
     def _nested_filler(self, name: str, model: type) -> ModelFiller[Any]:
@@ -474,6 +500,12 @@ class ModelFiller[T]:
             return self._nested_filler(name, model).fill(**fixed)
         except ModelFillError as error:
             raise type(error)(f"{name}: {error}") from error
+
+    def _refresh(self, fixed_fields: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+        """Another batch member's inputs: fresh provider, boring and nested values, but
+        the same solved ones; a provided nested model that is solved stays fixed."""
+        kept = {name: inputs[name] for name, _ in self._compiled.nested if name in inputs}
+        return self._inputs({**fixed_fields, **kept})[0]
 
     def _inputs(self, fixed_fields: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
         """Constructor inputs besides the solver's candidate, and the input names chosen.
@@ -515,7 +547,7 @@ class ModelFiller[T]:
             else:
                 missing.append(name)
                 continue
-            chosen.add(field.input_name or name)
+            chosen.add(field.keyword)
         if missing:
             raise UnsupportedConstraint(
                 f"modelfill cannot generate {', '.join(missing)}; pass values or add providers"

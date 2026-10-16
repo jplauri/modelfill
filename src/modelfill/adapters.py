@@ -61,6 +61,11 @@ class FieldSpec:
     metadata: tuple[Any, ...] = ()  # Pydantic's constraints, for boring values of external fields.
     pattern: Pattern | None = None  # A string field's pattern, checked outside the solver.
 
+    @property
+    def keyword(self) -> str:
+        """The constructor's keyword: the validation alias, even an empty one, else the name."""
+        return self.name if self.input_name is None else self.input_name
+
     def preferred(self) -> Any:
         """Evaluate an ordinary default once per fill; it is a preference."""
         if self.default_factory is not None:
@@ -89,9 +94,7 @@ class Adapter:
     def construct(self, values: dict[str, Any]) -> Any:
         """Run the model's real constructor, including its original validators."""
         inputs = {
-            field.input_name or field.name: values[field.name]
-            for field in self.fields
-            if field.name in values
+            field.keyword: values[field.name] for field in self.fields if field.name in values
         }
         return self.model(**inputs)
 
@@ -378,7 +381,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
                 pattern,
             )
         )
-    inputs = [field.input_name or field.name for field in fields]
+    inputs = [field.keyword for field in fields]
     if len(set(inputs)) != len(inputs):
         raise UnsupportedConstraint("Multiple fields share the same validation alias")
     return Adapter(model, tuple(fields), tuple(constraints), validators, tuple(unsupported))

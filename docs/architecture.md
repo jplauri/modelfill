@@ -130,8 +130,9 @@ mention them: a validator that reads an external field is unsupported, which
 already rules out UNSAT. A nested model is completed by its own filler, so a
 contradiction among a nested dict's fields is proven by that filler's solver and
 is a genuine impossibility for the outer model too. When Pydantic rejects a
-boring or provided value, retrying cannot help, because retries change only
-solved fields, so the error names the field at once.
+boring or provided value, the search goes on: an error's location says where it
+was reported, not what it depends on, and a validator of that field may read
+solved fields through `info.data`. If the search ends, the error names the field.
 
 Z3 strings are restricted to code points U+0000 through U+2FFFF. Fixed strings
 outside that range are explicitly unsupported. Literal backslashes are escaped
@@ -149,7 +150,11 @@ paths; reading the nested object as a whole stays unsupported, because the
 solver only knows its fields. Construction builds each nested object from its
 solved values and its own external fields, innermost first, then the parent. A
 given nested instance is used as it is, and its solved values become fixed, so
-the parent's rules see them.
+the parent's rules see them. Pydantic does not validate it again by default, so
+an instance that breaks its own model's rules, such as one keeping an unchecked
+default, would turn those rules into a false contradiction; it is refused as an
+input error instead. Dropping its rules for that call would be more faithful, but
+only under its model's default `revalidate_instances="never"`.
 
 Unsupported logic inside a nested model counts for the whole object: an unknown
 hook there could change values the parent's rules read, so every predicate is
@@ -203,9 +208,12 @@ returned value never depends on machine speed. Resource use does depend on
 solver history, so close to the limit, whether a query finishes can depend on
 earlier calls; it then raises, and never returns a different value.
 
-The answer depends only on the fixed inputs and default values, so each thread
-caches canonical assignments by them (bounded): a repeated fill reruns only
-construction, and default factories still run once per call. `batch` excludes
+The first candidate depends only on the fixed inputs and default values, so each
+thread caches it by them (bounded) when it validates on the first try: whenever
+it validates again, a fresh search would return it too, so a repeated fill reruns
+only construction, and default factories still run once per call. A later
+candidate is never cached, because external values, which the key leaves out, may
+have rejected the ones before it. `batch` excludes
 each completion in turn, enumerating distinct completions in canonical order.
 Reusing a `ModelFiller` avoids repeated analysis. Each thread receives its own
 solver and private Z3 context; only compiled immutable information is shared.

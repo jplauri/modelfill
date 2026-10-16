@@ -89,6 +89,17 @@ def test_a_configured_filler_brings_its_providers(tagged):
     assert tagged.id == UUID(int=7)  # The provider beats the model's random default.
 
 
+class Labeled(BaseModel):
+    n: int
+    id: UUID  # Required, so from_model would draw it if no provider supplied it.
+
+
+@settings(max_examples=5, deadline=None)
+@given(from_model(ModelFiller(Labeled, providers={UUID: lambda: UUID(int=7)})))
+def test_providers_supply_required_fields_too(labeled):
+    assert labeled.id == UUID(int=7)
+
+
 class Coded(BaseModel):
     code: str = Field(pattern=r"^[A-Z]{3}-\d{2}$")
     count: int = Field(ge=0)
