@@ -265,15 +265,17 @@ candidate it rejects is excluded and the next canonical candidate is tried.
 Attempts alternate between preferring the guidance and ignoring it, so
 misleading guidance cannot starve the search, and the sequence is the same on
 every run. Guidance that leaves no candidate at all, such as a value its pattern
-rules out, is dropped for the rest of the call. It tries at most `max_attempts` candidates and never claims UNSAT in
-this fallback mode. This bounded search can miss valid solutions, especially
-narrow conditions or transformations.
+rules out, is dropped for the rest of the call. It tries at most `max_attempts`
+candidates and never claims UNSAT in this fallback mode. This bounded search can
+miss valid solutions, especially narrow conditions or transformations.
 
-Only `ValueError` (including Pydantic `ValidationError`) and `AssertionError`
-from ordinary construction are treated as candidate rejection. Other Python
-exceptions propagate so programming errors are visible. Default-factory
-exceptions also propagate. Validation is not sandboxed: do not use side effects
-or nondeterministic validators. Solver timeouts cannot interrupt Python code.
+A candidate counts as rejected only when construction turns it down the way its
+kind of model does: with `ValidationError` from a Pydantic model, which wraps its
+validators' errors, or with `ValueError` or `AssertionError` from a dataclass's
+`__post_init__`. Any other exception propagates so programming errors are visible,
+including one from a default factory. Validation is not sandboxed: do not use side
+effects or nondeterministic validators. Solver timeouts cannot interrupt Python
+code.
 
 Z3 string values cover U+0000–U+2FFFF, including ordinary text and emoji. Fixed
 strings outside this range are explicitly unsupported. Such literals in a
@@ -361,10 +363,12 @@ of `a`–`z`, `A`–`Z`, `0`–`9` that fits:
 | `phone: str = Field(pattern=r"^\+?[1-9]\d{1,14}$")` | `10` |
 
 `batch(count)` returns `count` distinct completions, compared on the validated
-objects' generated fields, in canonical order: the canonical completion, then the canonical
-completion of what remains once each earlier one is excluded. It raises
+objects' generated fields, in canonical order: the canonical completion, then the
+canonical completion of what remains once each earlier one is excluded. It raises
 `GenerationExhausted` when fewer distinct valid completions exist or can be found
-within the budget.
+within the budget. When each member gets its own provider values and unsupported
+logic could judge candidates by them, a member first tries again, in order, the
+candidates that earlier members tried.
 
 Canonical values are stable within a release but **not across versions**: a later
 release may choose differently. A test should fix every field it asserts on.
@@ -451,9 +455,9 @@ A field with no value from any source, such as one of an arbitrary class, raises
 boring value, for example because of a custom validator, the search ends in
 `GenerationExhausted`, which names the field. Validators that read these fields
 remain unsupported logic, as does code in their metadata, such as an
-`AfterValidator`, so a model with either falls back to the bounded search; so does
-a rule that reads an optional nested model or one with a default, and any
-unsupported logic inside a nested model makes the whole object fall back.
+`AfterValidator` or `ValidateAs`, so a model with either falls back to the bounded
+search; so does a rule that reads an optional nested model or one with a default,
+and any unsupported logic inside a nested model makes the whole object fall back.
 
 ## Exploration with Hypothesis
 

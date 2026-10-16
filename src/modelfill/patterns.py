@@ -24,6 +24,9 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 _TOP = 0x2FFFF  # Z3 strings end here, so spelled values do too.
 _STATES = 4096  # A larger automaton, as for x{1,9999}, is not spelled.
+# Nor is one that takes more sequences than this to read: a repeat of something that
+# reads nothing, as of the empty group in (){1000000000}, adds no states to count.
+_SEQUENCES = 16 * _STATES
 _PREFERRED = string.ascii_lowercase + string.ascii_uppercase + string.digits
 # Unicode White_Space, which Rust's \s means. Python's \s differs slightly; Pydantic decides.
 _WHITE_SPACE = frozenset(
@@ -110,6 +113,7 @@ class _Automaton:
         self.edges: list[list[tuple[_Chars | str | None, int]]] = []
         self.closures: dict[tuple[int, str], frozenset[int]] = {}
         self.lock = threading.Lock()
+        self.sequences = 0  # Read so far, against _SEQUENCES.
         self.start, self.accept = self.state(), self.state()
         anything = _Chars(negate=True)
         state = self.loop(self.start, lambda state: self.step(anything, state))
@@ -155,6 +159,9 @@ class _Automaton:
 
     def sequence(self, items: Iterable[tuple[Any, Any]], state: int, fold: bool) -> int:
         """Read items in order; fold says whether (?i) is in force."""
+        self.sequences += 1
+        if self.sequences > _SEQUENCES:
+            raise _Unreadable("the pattern would take too long to read")
         for op, av in items:
             state = self.item(op, av, state, fold)
         return state
@@ -197,6 +204,8 @@ class _Automaton:
             return self.step("$", state)
         if op in (sre.MAX_REPEAT, sre.MIN_REPEAT):
             low, high, items = av
+            if not items:  # Nothing, however often, is nothing: (?:){1000000000} is "".
+                return state
             for _ in range(low):
                 state = self.sequence(items, state, fold)
             if high is sre.MAXREPEAT:

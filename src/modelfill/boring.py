@@ -28,6 +28,8 @@ from pydantic import (
 )
 from pydantic.types import UuidVersion
 
+from .adapters import _flatten
+
 MISSING = dataclasses.MISSING
 _START = datetime(2025, 1, 1)  # The anchor that canonical dates and times use, too.
 _SCALARS: dict[Any, Any] = {
@@ -83,7 +85,7 @@ def boring(annotation: Any, metadata: Sequence[Any] = ()) -> Any:
         return next((value for value in map(boring, args) if value is not MISSING), MISSING)
     if origin is Literal:
         return args[0]
-    limits = {type(item): item for item in metadata}  # The last of each kind wins.
+    limits = {type(item): item for item in _flatten(metadata)}  # The last of each kind wins.
     size = limits[MinLen].min_length if MinLen in limits else 0
     kind = origin or annotation
     if kind is tuple and args and args[-1] is not Ellipsis:  # A fixed shape: one per position.

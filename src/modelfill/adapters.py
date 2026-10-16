@@ -11,23 +11,35 @@ import dataclasses
 import inspect
 import math
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from copy import deepcopy
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin, get_type_hints
 
-from annotated_types import Ge, GroupedMetadata, Gt, Le, Lt, MaxLen, MinLen, MultipleOf
-from pydantic import (
-    AfterValidator,
-    BaseModel,
-    BeforeValidator,
-    ConfigDict,
-    Field,
-    GetPydanticSchema,
-    PlainValidator,
-    WrapValidator,
+from annotated_types import (
+    Ge,
+    GroupedMetadata,
+    Gt,
+    Le,
+    Lt,
+    MaxLen,
+    MinLen,
+    MultipleOf,
+    Not,
+    Predicate,
 )
-from pydantic.types import Strict
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    PlainSerializer,
+    Tag,
+    UrlConstraints,
+    ValidationError,
+    WrapSerializer,
+)
+from pydantic.types import PathType, Strict, UuidVersion
 from pydantic_core import PydanticUndefined
 
 from .errors import UnsupportedConstraint
@@ -107,6 +119,15 @@ class Adapter:
         }
         return self.model(**inputs)
 
+    @property
+    def rejections(self) -> tuple[type[Exception], ...]:
+        """What the constructor raises to turn values down. Pydantic wraps its validators'
+        errors in ValidationError, so any other error it lets out, such as a default
+        factory's, is not a rejection; a dataclass's __post_init__ raises them itself."""
+        if issubclass(self.model, BaseModel):
+            return (ValidationError,)
+        return (ValueError, AssertionError)
+
     def check_fixed(self, values: dict[str, Any]) -> None:
         """The public API takes canonical field names and exact Python types."""
         fields = {field.name: field for field in self.fields}
@@ -148,18 +169,32 @@ _SYMBOLS = {Gt: ">", Ge: ">=", Lt: "<", Le: "<="}
 _GENERAL = type(Field(pattern="x").metadata[0])
 
 
-# Metadata that runs code while Pydantic validates a field.
-_CALLBACKS = (AfterValidator, BeforeValidator, PlainValidator, WrapValidator, GetPydanticSchema)
+# Pydantic markers whose schema hooks only constrain, tag or serialize a value. Being
+# Pydantic's is not enough: ValidateAs, say, runs a function it is given.
+_MARKERS = (PathType, PlainSerializer, Tag, UrlConstraints, UuidVersion, WrapSerializer)
 
 
 def _runs_code(item: Any) -> bool:
-    """Whether metadata runs code: a validator, or a schema hook from outside Pydantic,
-    whose own markers, such as UuidVersion, only constrain."""
-    module = getattr(item, "__module__", None) or ""
-    foreign = module != "pydantic" and not module.startswith("pydantic.")
-    return isinstance(item, _CALLBACKS) or (
-        foreign and hasattr(item, "__get_pydantic_core_schema__")
+    """Whether Pydantic could run code for this unpacked metadata, beyond checking it:
+    anything with a schema hook but those markers, and annotated-types predicates."""
+    if isinstance(item, Discriminator):
+        return not isinstance(item.discriminator, str)  # A function picks the variant.
+    return isinstance(item, (Predicate, Not)) or (
+        hasattr(item, "__get_pydantic_core_schema__") and not isinstance(item, _MARKERS)
     )
+
+
+def _flatten(metadata: Iterable[Any]) -> list[Any]:
+    """Metadata as Pydantic reads it: groups such as StringConstraints, Interval and Len
+    unpacked into their single items, at any depth; constr() and conint() leave None
+    for each option not given."""
+    items: list[Any] = []
+    for item in metadata:
+        if isinstance(item, GroupedMetadata):
+            items += _flatten(item)
+        elif item is not None:
+            items.append(item)
+    return items
 
 
 def _pattern(item: Any) -> Any:
@@ -175,21 +210,14 @@ def _pattern(item: Any) -> Any:
 def _metadata_constraints(
     name: str, domain: Domain, metadata: list[Any], unsupported: list[str]
 ) -> tuple[list[tuple[str, Expr]], Any]:
-    """A field's own constraints, as (label, rule) pairs, and its pattern, or None."""
+    """A field's own constraints, as (label, rule) pairs, and its pattern, or None,
+    from its flattened metadata."""
     result: list[tuple[str, Expr]] = []
     pattern = None
     expression = var(name, domain)
-    # Groups such as StringConstraints and Interval unpack into single constraints;
-    # constr() and conint() leave None for each option not given.
-    items = [
-        part
-        for item in metadata
-        if item is not None
-        for part in (item if isinstance(item, GroupedMetadata) else (item,))
-    ]
     # Pydantic keeps the last constraint of each kind, with Field() before Annotated[...]:
     # Field(ge=10) on an Annotated[int, Ge(0)] alias leaves ge=0 in force.
-    for item in {type(item): item for item in items}.values():
+    for item in {type(item): item for item in metadata}.values():
         if isinstance(item, Strict):
             continue  # All generated/fixed inputs already have their canonical type.
         if isinstance(item, (Gt, Ge, Lt, Le)) and domain.kind in TIME_TYPES:
@@ -366,17 +394,19 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         )
         rules: list[tuple[str, Expr]] = []
         pattern = None
+        # Unpacked before anything reads it, so a group's own length limits override
+        # the global ones, as in Pydantic.
+        metadata = _flatten(info.metadata)
         if domain is None:
             # Pydantic validates an external field itself, but code in its metadata could
             # replace a value that a rule reads, a required nested model's say, so it is
             # unsupported logic, as a field validator of the field would be.
             unsupported += [
                 f"Field {name!r}: unsupported metadata {item!r}"
-                for item in info.metadata
+                for item in metadata
                 if _runs_code(item)
             ]
         else:
-            metadata = list(info.metadata)
             if domain.kind == "str" and domain.choices is None:
                 # A field's own length limit overrides the global configuration.
                 shortest, longest = config.get("str_min_length"), config.get("str_max_length")
@@ -409,7 +439,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
                 unchecked,
                 info.is_required(),
                 info.annotation,
-                tuple(info.metadata),
+                tuple(metadata),
                 pattern,
             )
         )

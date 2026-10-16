@@ -132,7 +132,9 @@ mention them: a validator that reads an external field is unsupported, which
 already rules out UNSAT. Code in an external field's metadata, such as an
 `AfterValidator`, is unsupported too: on a required nested model it could replace
 the object whose fields the parent's rules read, after that model's own rules
-held for the original. A nested model is completed by its own filler, so a
+held for the original. Groups are unpacked first, as Pydantic unpacks them, and
+only markers known to constrain, tag or serialize a value stay supported; coming
+from Pydantic is not enough, since `ValidateAs` runs a function it is given. A nested model is completed by its own filler, so a
 contradiction among a nested dict's fields is proven by that filler's solver and
 is a genuine impossibility for the outer model too. When Pydantic rejects a
 boring or provided value, the search goes on: an error's location says where it
@@ -220,6 +222,10 @@ only construction, and default factories still run once per call. A later
 candidate is never cached, because external values, which the key leaves out, may
 have rejected the ones before it. `batch` excludes
 each completion in turn, enumerating distinct completions in canonical order.
+Exclusions outlive a member's provider values only while the model is fully
+modeled, since then external values cannot change which candidates validate or
+what they become. Under unsupported logic, a member whose values differ first tries
+again, in order and without spending attempts, the candidates tried before.
 Reusing a `ModelFiller` avoids repeated analysis. Each thread receives its own
 solver and private Z3 context; only compiled immutable information is shared.
 Compilation and the top-level convenience filler use bounded LRU caches keyed by
@@ -254,7 +260,11 @@ least character. The length is the one nearest the name's if a value can start
 with its first letter, and the shortest otherwise. Python's and Rust's syntax and
 Unicode tables differ in corners, such as `\w` or nested sets, but a value the
 automaton gets wrong is merely rejected by Pydantic. A pattern the parser cannot
-read, or whose automaton would exceed 4096 states, is only checked.
+read, or whose automaton would exceed 4096 states, is only checked. So is one that
+takes more than 65536 sequences to read, since repeating something that reads
+nothing, such as the empty group in `(){1000000}`, adds no state to count; an
+empty repeated body, as in `(?:){1000000}`, simply reads as nothing. This bounds
+compilation, which no solver budget covers.
 
 Among a field's candidates, the first spelled value comes right after the
 name's, so different fields keep values of their own; the strings that rules and

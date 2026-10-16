@@ -45,10 +45,12 @@
   spelled instead of raising `RecursionError`.
 - An empty validation alias, `Field(alias="")`, is passed as such instead of
   being mistaken for no alias.
-- Code in an external field's metadata, such as an `AfterValidator` or a custom
-  schema hook, is unsupported logic, as a field validator of that field already
-  was. On a required nested model it could replace the object the parent's rules
-  read, so modelfill claimed models impossible that Pydantic accepts.
+- Code in an external field's metadata, such as an `AfterValidator`, `ValidateAs`,
+  a custom schema hook or one inside a group, is unsupported logic, as a field
+  validator of that field already was. On a required nested model it could replace
+  the object the parent's rules read, so modelfill claimed models impossible that
+  Pydantic accepts. Only markers known to constrain, tag or serialize a value, such
+  as `UuidVersion`, stay supported.
 - Candidates for a field with a pattern are checked against the pattern alone. The
   field's other metadata ran there too, without the model's data, so a validator
   that reads `info.data` raised `TypeError`, and one that uppercases rejected
@@ -58,6 +60,24 @@
   search.
 - An infinite bound on an external number, such as `Field(ge=float("-inf"))`, no
   longer makes `fill()` and `explain()` raise `OverflowError`.
+- A group's own length limits, as in `StringConstraints(min_length=2,
+  max_length=3)`, override the global `str_min_length` and `str_max_length`, as in
+  Pydantic. The globals used to replace them, so modelfill claimed such models
+  impossible. Boring values meet grouped constraints too, as for
+  `conlist(int, min_length=2)`.
+- In fallback mode, a batch member whose provider values differ first tries again
+  the candidates that earlier members tried: one rejected under earlier values, or
+  turned into another object, can fit the new ones, but stayed excluded.
+- A failing default factory of an external field propagates, as documented,
+  instead of counting as a rejection and ending in `GenerationExhausted`. Only
+  `ValidationError` rejects a candidate for a Pydantic model, which wraps its
+  validators' errors in it; a dataclass still rejects with `ValueError` or
+  `AssertionError` from `__post_init__`, and its factories now run before it.
+- Reading a pattern to spell values is bounded in work, not only in states. A
+  repeat of something that reads nothing, as in `^(?:){1000000000}$`, adds no
+  states, so it once looped for each repetition when the model was compiled; an
+  empty body now reads as nothing, and any other pattern past the bound is still
+  checked, just not spelled.
 
 ## 0.3.0
 

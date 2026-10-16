@@ -3,7 +3,9 @@
 from dataclasses import dataclass
 from typing import Annotated
 
+import pydantic
 import pytest
+from annotated_types import GroupedMetadata
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
 from modelfill import (
@@ -212,21 +214,36 @@ def negative_copy(counter):  # A new object: the input is left alone.
     return counter.model_copy(update={"count": -counter.count - 1})
 
 
-class Flipped(BaseModel):
-    counter: Annotated[Counter, AfterValidator(negative_copy)]
-
-    @model_validator(mode="after")
-    def check(self):  # Reads the copy, not the Counter that met count >= 0.
-        if self.counter.count >= 0:
-            raise ValueError("the count must be negative after the copy")
-        return self
+class Flip(GroupedMetadata):  # Pydantic unpacks a group and runs what is inside.
+    def __iter__(self):
+        yield AfterValidator(negative_copy)
 
 
-def test_code_in_a_nested_model_field_metadata_is_unsupported():
+FLIPS = [AfterValidator(negative_copy), Flip()]
+if hasattr(pydantic, "ValidateAs"):  # A Pydantic marker that runs the function it is given.
+    FLIPS.append(pydantic.ValidateAs(Counter, negative_copy))
+
+
+def flipped(flip):
+    class Flipped(BaseModel):
+        counter: Annotated[Counter, flip]
+
+        @model_validator(mode="after")
+        def check(self):  # Reads the copy, not the Counter that met count >= 0.
+            if self.counter.count >= 0:
+                raise ValueError("the count must be negative after the copy")
+            return self
+
+    return Flipped
+
+
+@pytest.mark.parametrize("flip", FLIPS, ids=lambda flip: type(flip).__name__)
+def test_code_in_a_nested_model_field_metadata_is_unsupported(flip):
     # Solving count >= 0 and count < 0 together once claimed a contradiction.
-    with pytest.raises(UnsupportedConstraint, match="AfterValidator"):
-        ModelFiller(Flipped, mode="strict")
-    assert fill(Flipped).counter.count == -1
+    model = flipped(flip)
+    with pytest.raises(UnsupportedConstraint, match="unsupported metadata"):
+        ModelFiller(model, mode="strict")
+    assert fill(model).counter.count == -1
 
 
 class Leaf(BaseModel):

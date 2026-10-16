@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from functools import lru_cache, partial
 from typing import Any, Literal, Union, get_args, get_origin
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from .adapters import MISSING, Adapter, FieldSpec, _domain, introspect
 from .backend import Solver
@@ -56,6 +56,11 @@ class _Compiled:
 
 
 _COMPILING = threading.local()  # The models being compiled, to stop a model nesting itself.
+
+
+class _Rejected(Exception):
+    """A candidate turned down, as a constructor signals it or by the checks on what it
+    returned; anything else raised during construction is an error and propagates."""
 
 
 def _relabel(label: str, prefix: str) -> str:
@@ -310,9 +315,9 @@ class ModelFiller[T]:
         if rng is None and count == 1 and key in cache:
             try:
                 return [self._construct(inputs, cache[key])]
-            except (ValueError, AssertionError):
+            except _Rejected:
                 pass  # These external values reject it; the search goes past it.
-        last_error: Exception | None = None
+        last_error: BaseException | None = None
         omitted = [name for name in self._compiled.unchecked if name not in solved]
         results: list[T] = []
         seen: set[tuple[Any, ...]] = set()  # The results' generated values.
@@ -334,37 +339,44 @@ class ModelFiller[T]:
                     )
                 given, rules = solver.conflict(solved, self._compiled.constraints)
                 raise UnsatisfiableConstraints(_contradiction(self.model.__name__, given, rules))
+            tried: list[dict[str, Any]] = []  # Every candidate so far, in order; all blocked.
+            again: list[dict[str, Any]] = []  # Tried ones to try under new external values.
             while len(results) < count and failures < self.max_attempts:
-                if (results or failures) and not solver.check():
-                    break  # Every remaining candidate has been tried.
-                # Alternate, so guidance misled by an unknown hook cannot starve the search,
-                # and go without it when it leaves no candidate at all.
-                for guided in (True, False) if guidance and failures % 2 == 0 else (False,):
-                    try:
-                        if rng is None:
-                            candidate = solver.canonical(solved, defaults, guided=guided)
-                        else:
-                            candidate = solver.candidate(solved, defaults, rng, guided=guided)
-                        break
-                    except GenerationExhausted as exc:
-                        stuck = str(exc)  # No readable or matching string remains, say.
-                        if guided:  # Excluding more candidates could never bring one back.
-                            guidance = False
+                cost = 0 if again else 1  # A retry costs no attempt: there are only so many.
+                if again:
+                    candidate = again.pop(0)
                 else:
-                    break
-                stuck = ""
-                solver.block(candidate)  # Retries and batch members must differ.
+                    if (results or failures) and not solver.check():
+                        break  # Every remaining candidate has been tried.
+                    # Alternate, so guidance misled by an unknown hook cannot starve the
+                    # search, and go without it when it leaves no candidate at all.
+                    for guided in (True, False) if guidance and failures % 2 == 0 else (False,):
+                        try:
+                            if rng is None:
+                                candidate = solver.canonical(solved, defaults, guided=guided)
+                            else:
+                                candidate = solver.candidate(solved, defaults, rng, guided=guided)
+                            break
+                        except GenerationExhausted as exc:
+                            stuck = str(exc)  # No readable or matching string remains, say.
+                            if guided:  # Excluding more candidates never brings one back.
+                                guidance = False
+                    else:
+                        break
+                    stuck = ""
+                    solver.block(candidate)  # Retries and batch members must differ.
+                    tried.append(candidate)
                 try:
                     instance = self._construct(inputs, candidate)
-                except (ValueError, AssertionError) as exc:
+                except _Rejected as exc:
                     # Even an error at a value chosen for another field may depend on the
                     # solved fields, through info.data, so the search goes on.
-                    failures, last_error = failures + 1, exc
+                    failures, last_error = failures + cost, exc.__cause__ or exc
                     continue
                 # Unsupported logic can turn different candidates into equal objects.
                 generated = tuple(_get(instance, name) for name in candidate)
                 if generated in seen:
-                    failures += 1
+                    failures += cost
                     continue
                 seen.add(generated)
                 results.append(instance)
@@ -374,7 +386,14 @@ class ModelFiller[T]:
                     cache[key] = candidate
                 failures = 0
                 if len(results) < count:  # Each member gets its own provider values.
+                    previous = inputs
                     inputs = inputs | {path: make() for path, make in fresh.items()}
+                    # Unsupported logic may judge a candidate by these values, or turn it
+                    # into another object, so earlier verdicts lapse: the candidates tried
+                    # so far get another try, in order, before any new one.
+                    # ponytail: each member retries them all, quadratic in a long batch.
+                    if self._compiled.unsupported and inputs != previous:
+                        again = list(tried)
         if len(results) == count:
             return results
         found = f"found {len(results)} of {count} distinct completions; " if count > 1 else ""
@@ -416,7 +435,7 @@ class ModelFiller[T]:
         ]
         if isinstance(instance, self.model) and not invalid and not changed:
             return instance
-        raise ValueError(
+        raise _Rejected(
             f"Validation changed fixed fields {changed} or returned noncanonical "
             f"fields {invalid} / an incompatible object"
         )
@@ -442,7 +461,11 @@ class ModelFiller[T]:
                     if key.startswith(prefix)
                 }
                 local[name] = self._nested_filler(name, model)._assemble(inner)
-        return self._compiled.adapter.construct(local)
+        adapter = self._compiled.adapter
+        try:
+            return adapter.construct(local)
+        except adapter.rejections as exc:
+            raise _Rejected from exc
 
     def _nested_inputs(
         self, name: str, model: type, given: Any
@@ -558,7 +581,11 @@ class ModelFiller[T]:
             if provider is not None:
                 make = provider
             elif not field.required:
-                continue  # The model's own default applies.
+                # A dataclass runs its factory unvalidated, so it may as well run here,
+                # where what it raises cannot pass for __post_init__ turning one down.
+                if field.default_factory is None or issubclass(self.model, BaseModel):
+                    continue  # The model's own default applies.
+                make = field.default_factory
             elif nested is not None and nested is field.annotation:
                 make = partial(self._fill_nested, name, nested, {})
             elif boring(field.annotation, field.metadata) is not MISSING:
