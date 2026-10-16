@@ -7,7 +7,17 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic import UUID1, UUID4, AwareDatetime, BaseModel, ConfigDict, EmailStr, Field, HttpUrl
+from pydantic import (
+    UUID1,
+    UUID4,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    HttpUrl,
+    field_validator,
+)
 
 from modelfill import (
     GenerationExhausted,
@@ -184,10 +194,26 @@ class Narrow(BaseModel):
     price: Decimal = Field(max_digits=2, decimal_places=2, ge=Decimal("0.5"))
 
 
-def test_a_rejected_boring_value_fails_fast_and_names_the_field():
+def test_a_rejected_boring_value_is_named_in_the_error():
     with pytest.raises(GenerationExhausted, match="value chosen for price; pass a value"):
         fill(Narrow)
     assert fill(Narrow, price=Decimal("0.75")).price == Decimal("0.75")
+
+
+class CountAndItems(BaseModel):
+    count: int = Field(ge=0, le=1)
+    items: list[int]
+
+    @field_validator("items")
+    @classmethod
+    def check(cls, items, info):  # Reported at items, but count decides it.
+        if info.data["count"] != len(items) + 1:
+            raise ValueError("count must be one more than the number of items")
+        return items
+
+
+def test_a_rejection_at_a_chosen_value_does_not_end_the_search():
+    assert fill(CountAndItems) == CountAndItems(count=1, items=[])
 
 
 class Priced(BaseModel):

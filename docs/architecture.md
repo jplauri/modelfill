@@ -130,8 +130,9 @@ mention them: a validator that reads an external field is unsupported, which
 already rules out UNSAT. A nested model is completed by its own filler, so a
 contradiction among a nested dict's fields is proven by that filler's solver and
 is a genuine impossibility for the outer model too. When Pydantic rejects a
-boring or provided value, retrying cannot help, because retries change only
-solved fields, so the error names the field at once.
+boring or provided value, the search goes on: an error's location says where it
+was reported, not what it depends on, and a validator of that field may read
+solved fields through `info.data`. If the search ends, the error names the field.
 
 Z3 strings are restricted to code points U+0000 through U+2FFFF. Fixed strings
 outside that range are explicitly unsupported. Literal backslashes are escaped

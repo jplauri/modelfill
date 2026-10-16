@@ -31,6 +31,9 @@
   instance again, but modelfill solves with its rules.
 - `batch()` compares the validated objects, so a validator that normalizes
   different candidates to the same value no longer yields duplicates.
+- When Pydantic rejects a value modelfill chose for an external field, the search
+  goes on instead of giving up: a validator of that field may read solved fields
+  through `info.data`. If the search ends, the error still names the field.
 
 ## 0.3.0
 

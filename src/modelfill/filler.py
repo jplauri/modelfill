@@ -349,19 +349,8 @@ class ModelFiller[T]:
                 try:
                     instance = self._construct(inputs, candidate)
                 except (ValueError, AssertionError) as exc:
-                    # Retrying changes only solved fields, so it cannot fix a value modelfill
-                    # chose for another field.
-                    # Only this model's own errors name its fields; a nested one's do not.
-                    own = isinstance(exc, ValidationError) and exc.title == self.model.__name__
-                    if own and (
-                        rejected := chosen
-                        & {error["loc"][0] for error in exc.errors() if error["loc"]}
-                    ):
-                        raise GenerationExhausted(
-                            f"{self.model.__name__}: Pydantic rejected the value chosen for "
-                            f"{', '.join(sorted(map(str, rejected)))}; pass a value or add a "
-                            f"provider: {exc}"
-                        ) from exc
+                    # Even an error at a value chosen for another field may depend on the
+                    # solved fields, through info.data, so the search goes on.
                     failures, last_error = failures + 1, exc
                     continue
                 # Unsupported logic can turn different candidates into equal objects.
@@ -388,6 +377,14 @@ class ModelFiller[T]:
         message = f"{self.model.__name__}: {found}{reason}"
         if self._compiled.unsupported:
             message += "; unsupported logic: " + "; ".join(self._compiled.unsupported)
+        # Only this model's own errors name its fields; a nested one's do not.
+        if isinstance(last_error, ValidationError) and last_error.title == self.model.__name__:
+            locations = {error["loc"][0] for error in last_error.errors() if error["loc"]}
+            if rejected := chosen & locations:
+                message += (
+                    f"; Pydantic rejected the value chosen for "
+                    f"{', '.join(sorted(map(str, rejected)))}; pass a value or add a provider"
+                )
         if last_error is not None:
             message += f"; last rejection: {last_error}"
         raise GenerationExhausted(message) from last_error

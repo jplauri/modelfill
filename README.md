@@ -443,12 +443,12 @@ Providers apply only to fields the solver does not model, so one that targets a
 solved field, or a path that does not exist, fails when the filler is created.
 A field with no value from any source, such as one of an arbitrary class, raises
 `UnsupportedConstraint`; pass a value or add a provider. So do `PastDate` and
-`FutureDate`, whose validity depends on the clock. If Pydantic rejects a boring
-value, for example because of a custom validator, `GenerationExhausted` names
-the field at once. Validators that read these fields remain unsupported logic,
-so a model with one falls back to the bounded search; so does a rule that reads
-an optional nested model or one with a default, and any unsupported logic inside
-a nested model makes the whole object fall back.
+`FutureDate`, whose validity depends on the clock. If Pydantic keeps rejecting a
+boring value, for example because of a custom validator, the search ends in
+`GenerationExhausted`, which names the field. Validators that read these fields
+remain unsupported logic, so a model with one falls back to the bounded search;
+so does a rule that reads an optional nested model or one with a default, and any
+unsupported logic inside a nested model makes the whole object fall back.
 
 ## Exploration with Hypothesis
 
