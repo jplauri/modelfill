@@ -314,6 +314,7 @@ class ModelFiller[T]:
         last_error: Exception | None = None
         omitted = [name for name in self._compiled.unchecked if name not in solved]
         results: list[T] = []
+        seen: set[tuple[Any, ...]] = set()  # The results' generated values.
         failures = 0
         stuck = ""  # Why no further candidate could be chosen, if that ended the search.
         with solver.session(solved):
@@ -346,7 +347,7 @@ class ModelFiller[T]:
                     break
                 solver.block(candidate)  # Retries and batch members must differ.
                 try:
-                    results.append(self._construct(inputs, candidate))
+                    instance = self._construct(inputs, candidate)
                 except (ValueError, AssertionError) as exc:
                     # Retrying changes only solved fields, so it cannot fix a value modelfill
                     # chose for another field.
@@ -363,6 +364,13 @@ class ModelFiller[T]:
                         ) from exc
                     failures, last_error = failures + 1, exc
                     continue
+                # Unsupported logic can turn different candidates into equal objects.
+                generated = tuple(_get(instance, name) for name in candidate)
+                if generated in seen:
+                    failures += 1
+                    continue
+                seen.add(generated)
+                results.append(instance)
                 if rng is None and count == 1 and not failures:
                     if len(cache) >= 256:  # Bounded: forget the oldest assignment.
                         del cache[next(iter(cache))]

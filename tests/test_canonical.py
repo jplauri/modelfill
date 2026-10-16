@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Annotated, Literal
 
 import pytest
-from pydantic import AfterValidator, BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
 from examples.meeting import Meeting
 from modelfill import GenerationExhausted, ModelFiller, SolverTimeout, SolverUnknown, fill
@@ -244,6 +244,22 @@ def test_auto_mode_fallback_is_deterministic():
     assert ModelFiller(EvenOnly).explain()["unsupported"]
     assert fill(EvenOnly).value == 2  # 1 is rejected by validation, blocked, then 2.
     assert [even.value for even in ModelFiller(EvenOnly).batch(3)] == [2, 4, 6]
+
+
+class Normalized(BaseModel):
+    value: int
+
+    @field_validator("value")
+    @classmethod
+    def normalize(cls, value):  # Unsupported: every candidate becomes 0.
+        return 0
+
+
+def test_batch_members_differ_after_validation():
+    filler = ModelFiller(Normalized, max_attempts=5)
+    assert [normalized.value for normalized in filler.batch(1)] == [0]
+    with pytest.raises(GenerationExhausted, match="found 1 of 2"):
+        filler.batch(2)
 
 
 def test_seed_is_gone_and_explain_names_the_selection():

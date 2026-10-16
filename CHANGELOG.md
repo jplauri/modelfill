@@ -29,6 +29,8 @@
   keeping an unchecked default `balance=-1` despite `ge=0`, raises `ValueError`
   instead of a false `UnsatisfiableConstraints`. Pydantic does not check such an
   instance again, but modelfill solves with its rules.
+- `batch()` compares the validated objects, so a validator that normalizes
+  different candidates to the same value no longer yields duplicates.
 
 ## 0.3.0
 

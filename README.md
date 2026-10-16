@@ -359,8 +359,8 @@ of `a`–`z`, `A`–`Z`, `0`–`9` that fits:
 | `zip: str = Field(pattern=r"^\d{5}$")` | `00000` |
 | `phone: str = Field(pattern=r"^\+?[1-9]\d{1,14}$")` | `10` |
 
-`batch(count)` returns `count` distinct completions, compared on generated
-fields, in canonical order: the canonical completion, then the canonical
+`batch(count)` returns `count` distinct completions, compared on the validated
+objects' generated fields, in canonical order: the canonical completion, then the canonical
 completion of what remains once each earlier one is excluded. It raises
 `GenerationExhausted` when fewer distinct valid completions exist or can be found
 within the budget.
