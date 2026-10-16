@@ -16,18 +16,29 @@ from copy import deepcopy
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin, get_type_hints
 
-from annotated_types import Ge, GroupedMetadata, Gt, Le, Lt, MaxLen, MinLen, MultipleOf
-from pydantic import (
-    AfterValidator,
-    BaseModel,
-    BeforeValidator,
-    ConfigDict,
-    Field,
-    GetPydanticSchema,
-    PlainValidator,
-    WrapValidator,
+from annotated_types import (
+    Ge,
+    GroupedMetadata,
+    Gt,
+    Le,
+    Lt,
+    MaxLen,
+    MinLen,
+    MultipleOf,
+    Not,
+    Predicate,
 )
-from pydantic.types import Strict
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    PlainSerializer,
+    Tag,
+    UrlConstraints,
+    WrapSerializer,
+)
+from pydantic.types import PathType, Strict, UuidVersion
 from pydantic_core import PydanticUndefined
 
 from .errors import UnsupportedConstraint
@@ -148,17 +159,18 @@ _SYMBOLS = {Gt: ">", Ge: ">=", Lt: "<", Le: "<="}
 _GENERAL = type(Field(pattern="x").metadata[0])
 
 
-# Metadata that runs code while Pydantic validates a field.
-_CALLBACKS = (AfterValidator, BeforeValidator, PlainValidator, WrapValidator, GetPydanticSchema)
+# Pydantic markers whose schema hooks only constrain, tag or serialize a value. Being
+# Pydantic's is not enough: ValidateAs, say, runs a function it is given.
+_MARKERS = (PathType, PlainSerializer, Tag, UrlConstraints, UuidVersion, WrapSerializer)
 
 
 def _runs_code(item: Any) -> bool:
-    """Whether metadata runs code: a validator, or a schema hook from outside Pydantic,
-    whose own markers, such as UuidVersion, only constrain."""
-    module = getattr(item, "__module__", None) or ""
-    foreign = module != "pydantic" and not module.startswith("pydantic.")
-    return isinstance(item, _CALLBACKS) or (
-        foreign and hasattr(item, "__get_pydantic_core_schema__")
+    """Whether Pydantic could run code for this unpacked metadata, beyond checking it:
+    anything with a schema hook but those markers, and annotated-types predicates."""
+    if isinstance(item, Discriminator):
+        return not isinstance(item.discriminator, str)  # A function picks the variant.
+    return isinstance(item, (Predicate, Not)) or (
+        hasattr(item, "__get_pydantic_core_schema__") and not isinstance(item, _MARKERS)
     )
 
 
@@ -381,7 +393,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
             # unsupported logic, as a field validator of the field would be.
             unsupported += [
                 f"Field {name!r}: unsupported metadata {item!r}"
-                for item in info.metadata
+                for item in metadata
                 if _runs_code(item)
             ]
         else:

@@ -132,7 +132,9 @@ mention them: a validator that reads an external field is unsupported, which
 already rules out UNSAT. Code in an external field's metadata, such as an
 `AfterValidator`, is unsupported too: on a required nested model it could replace
 the object whose fields the parent's rules read, after that model's own rules
-held for the original. A nested model is completed by its own filler, so a
+held for the original. Groups are unpacked first, as Pydantic unpacks them, and
+only markers known to constrain, tag or serialize a value stay supported; coming
+from Pydantic is not enough, since `ValidateAs` runs a function it is given. A nested model is completed by its own filler, so a
 contradiction among a nested dict's fields is proven by that filler's solver and
 is a genuine impossibility for the outer model too. When Pydantic rejects a
 boring or provided value, the search goes on: an error's location says where it

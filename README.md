@@ -451,9 +451,9 @@ A field with no value from any source, such as one of an arbitrary class, raises
 boring value, for example because of a custom validator, the search ends in
 `GenerationExhausted`, which names the field. Validators that read these fields
 remain unsupported logic, as does code in their metadata, such as an
-`AfterValidator`, so a model with either falls back to the bounded search; so does
-a rule that reads an optional nested model or one with a default, and any
-unsupported logic inside a nested model makes the whole object fall back.
+`AfterValidator` or `ValidateAs`, so a model with either falls back to the bounded
+search; so does a rule that reads an optional nested model or one with a default,
+and any unsupported logic inside a nested model makes the whole object fall back.
 
 ## Exploration with Hypothesis
 

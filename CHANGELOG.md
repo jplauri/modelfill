@@ -45,10 +45,12 @@
   spelled instead of raising `RecursionError`.
 - An empty validation alias, `Field(alias="")`, is passed as such instead of
   being mistaken for no alias.
-- Code in an external field's metadata, such as an `AfterValidator` or a custom
-  schema hook, is unsupported logic, as a field validator of that field already
-  was. On a required nested model it could replace the object the parent's rules
-  read, so modelfill claimed models impossible that Pydantic accepts.
+- Code in an external field's metadata, such as an `AfterValidator`, `ValidateAs`,
+  a custom schema hook or one inside a group, is unsupported logic, as a field
+  validator of that field already was. On a required nested model it could replace
+  the object the parent's rules read, so modelfill claimed models impossible that
+  Pydantic accepts. Only markers known to constrain, tag or serialize a value, such
+  as `UuidVersion`, stay supported.
 - Candidates for a field with a pattern are checked against the pattern alone. The
   field's other metadata ran there too, without the model's data, so a validator
   that reads `info.data` raised `TypeError`, and one that uppercases rejected
