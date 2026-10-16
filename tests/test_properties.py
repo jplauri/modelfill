@@ -257,7 +257,7 @@ REGEXES = st.tuples(st.sampled_from(["", "(?i)"]), anchored(BODIES)).map("".join
 def test_spelled_and_sampled_values_match_as_pydantic_says(regex, name, seed):
     metadata = tuple(Field(pattern=regex).metadata)
     oracle = TypeAdapter(Annotated[str, *metadata])
-    pattern = Pattern(regex, metadata, None)
+    pattern = Pattern(regex, None)
     assert pattern.automaton is not None  # Every generated construct is read.
     values = list(itertools.islice(pattern.spell(name, lambda size: True, 0), 3))
     values.append(pattern.sample(random.Random(seed)))

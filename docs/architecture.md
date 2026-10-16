@@ -81,7 +81,9 @@ never reports UNSAT. This accounts for an unknown hook potentially transforming
 a value before a supported validator runs. Guidance is preferred on alternate
 attempts and only after a satisfiability check, so wrong guidance can waste
 attempts but never rules out a candidate for good or reaches a verdict; the
-original constructor decides. Diagnostics report both individual extraction results and
+original constructor decides. The check cannot see a pattern, so guidance may
+fit and still leave no matching string; that attempt then goes without it, and so
+do the rest, since excluding more candidates never brings one back. Diagnostics report both individual extraction results and
 whether validator constraints are active.
 
 An UNSAT verdict also explains itself. Only on that path, modelfill rebuilds
@@ -127,7 +129,10 @@ canonical completion or a fixed boring value, in that order, and they pass to th
 constructor, which validates them as usual; only solved fields must keep their
 exact type. They cannot weaken an UNSAT claim, because no extracted predicate can
 mention them: a validator that reads an external field is unsupported, which
-already rules out UNSAT. A nested model is completed by its own filler, so a
+already rules out UNSAT. Code in an external field's metadata, such as an
+`AfterValidator`, is unsupported too: on a required nested model it could replace
+the object whose fields the parent's rules read, after that model's own rules
+held for the original. A nested model is completed by its own filler, so a
 contradiction among a nested dict's fields is proven by that filler's solver and
 is a genuine impossibility for the outer model too. When Pydantic rejects a
 boring or provided value, the search goes on: an error's location says where it
@@ -227,12 +232,14 @@ character of a canonical value pinned by probes, every pattern using `\d` (71
 Unicode digit ranges) exhausted the default work limit, and the other realistic
 patterns tried took 22 ms to 1.5 s per value. Instead the solver ignores the
 pattern and therefore allows more values than Pydantic does, never fewer, so a
-proof of impossibility stays sound. Each candidate goes through the field's own
-Pydantic validation, which decides exactly, for either regex engine, flags and
-compiled patterns included. A fixed value that fails it is a proven
-contradiction, unless unsupported logic, such as a before validator, could
-change the value first, or the value comes from a given nested instance, which
-is used as it is. When the rules and a pattern cannot both hold, the search ends
+proof of impossibility stays sound. Pydantic checks each candidate against the
+pattern alone, which decides exactly, for either regex engine, flags and compiled
+patterns included. The field's other metadata, such as a validator that reads
+`info.data` or one that uppercases, runs only in the real constructor, which gives
+it the model's data and keeps what it returns. A fixed value that fails the
+pattern is a proven contradiction, unless unsupported logic, such as a before
+validator, could change the value first, or the value comes from a given nested
+instance, which is used as it is. When the rules and a pattern cannot both hold, the search ends
 in `GenerationExhausted`; proving such conflicts would need the pattern in Z3.
 
 Values are spelled in Python, in well under 3 ms for the same patterns. Python's

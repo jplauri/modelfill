@@ -38,11 +38,26 @@
   of drawing it with `st.from_type`, which overrode the provider.
 - Providers run once per returned object, as documented, so each `batch()` member
   gets its own values: a `uuid4` provider no longer gives every member the same id.
-  Boring values and nested completions are fresh per member too.
+  Boring values and nested completions are fresh per member too. A provider for a
+  required nested model, which is solved with its parent, fixes it for the whole
+  call, as an instance or a dict, at any depth.
 - A pattern value longer than Python's recursion limit, as for `^a{1500}$`, is
   spelled instead of raising `RecursionError`.
 - An empty validation alias, `Field(alias="")`, is passed as such instead of
   being mistaken for no alias.
+- Code in an external field's metadata, such as an `AfterValidator` or a custom
+  schema hook, is unsupported logic, as a field validator of that field already
+  was. On a required nested model it could replace the object the parent's rules
+  read, so modelfill claimed models impossible that Pydantic accepts.
+- Candidates for a field with a pattern are checked against the pattern alone. The
+  field's other metadata ran there too, without the model's data, so a validator
+  that reads `info.data` raised `TypeError`, and one that uppercases rejected
+  every value.
+- In fallback mode, guidance that leaves no candidate at all, such as a value its
+  pattern rules out, gives way to an unguided candidate instead of ending the
+  search.
+- An infinite bound on an external number, such as `Field(ge=float("-inf"))`, no
+  longer makes `fill()` and `explain()` raise `OverflowError`.
 
 ## 0.3.0
 

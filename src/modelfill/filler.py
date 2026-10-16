@@ -7,7 +7,7 @@ import threading
 import types
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import Any, Literal, Union, get_args, get_origin
 
 from pydantic import ValidationError
@@ -272,7 +272,7 @@ class ModelFiller[T]:
         domains = self._compiled.domains
         self._compiled.adapter.check_fixed(fixed_fields)
         # The solver sees generated fields; external values go straight to the constructor.
-        inputs, chosen = self._inputs(fixed_fields)
+        inputs, chosen, fresh = self._inputs(fixed_fields)
         solved = {name: value for name, value in inputs.items() if name in domains}
         # A fixed value that breaks its pattern can never validate, unless unsupported
         # logic, such as a before validator, changes it first. A given nested instance
@@ -318,6 +318,7 @@ class ModelFiller[T]:
         seen: set[tuple[Any, ...]] = set()  # The results' generated values.
         failures = 0
         stuck = ""  # Why no further candidate could be chosen, if that ended the search.
+        guidance = bool(self._compiled.guidance)  # Dropped once it leaves no candidate.
         with solver.session(solved):
             # This first check has no preferences or candidate exclusions.
             if not solver.check():
@@ -336,16 +337,22 @@ class ModelFiller[T]:
             while len(results) < count and failures < self.max_attempts:
                 if (results or failures) and not solver.check():
                     break  # Every remaining candidate has been tried.
-                # Alternate, so guidance misled by an unknown hook cannot starve the search.
-                guided = failures % 2 == 0
-                try:
-                    if rng is None:
-                        candidate = solver.canonical(solved, defaults, guided=guided)
-                    else:
-                        candidate = solver.candidate(solved, defaults, rng, guided=guided)
-                except GenerationExhausted as exc:
-                    stuck = str(exc)  # No readable or matching string remains, say.
+                # Alternate, so guidance misled by an unknown hook cannot starve the search,
+                # and go without it when it leaves no candidate at all.
+                for guided in (True, False) if guidance and failures % 2 == 0 else (False,):
+                    try:
+                        if rng is None:
+                            candidate = solver.canonical(solved, defaults, guided=guided)
+                        else:
+                            candidate = solver.candidate(solved, defaults, rng, guided=guided)
+                        break
+                    except GenerationExhausted as exc:
+                        stuck = str(exc)  # No readable or matching string remains, say.
+                        if guided:  # Excluding more candidates could never bring one back.
+                            guidance = False
+                else:
                     break
+                stuck = ""
                 solver.block(candidate)  # Retries and batch members must differ.
                 try:
                     instance = self._construct(inputs, candidate)
@@ -367,7 +374,7 @@ class ModelFiller[T]:
                     cache[key] = candidate
                 failures = 0
                 if len(results) < count:  # Each member gets its own provider values.
-                    inputs = self._refresh(fixed_fields, inputs)
+                    inputs = inputs | {path: make() for path, make in fresh.items()}
         if len(results) == count:
             return results
         found = f"found {len(results)} of {count} distinct completions; " if count > 1 else ""
@@ -437,8 +444,11 @@ class ModelFiller[T]:
                 local[name] = self._nested_filler(name, model)._assemble(inner)
         return self._compiled.adapter.construct(local)
 
-    def _nested_inputs(self, name: str, model: type, given: Any) -> dict[str, Any]:
-        """A solved nested model's inputs by path, such as "customer.age".
+    def _nested_inputs(
+        self, name: str, model: type, given: Any
+    ) -> tuple[dict[str, Any], dict[str, Callable[[], Any]]]:
+        """A solved nested model's inputs by path, such as "customer.age", and how to make
+        those that each batch member gets afresh, as _inputs says.
 
         A dict fixes some of its fields, as in any fill. A given instance is used as it
         is, and its solved values become fixed, so this model's rules see them. It must
@@ -446,11 +456,15 @@ class ModelFiller[T]:
         model's solver holds its values to them.
         """
         filler = self._nested_filler(name, model)
+        prefix = f"{name}."
         if given is MISSING or isinstance(given, dict):
             fixed = {} if given is MISSING else given
             filler._compiled.adapter.check_fixed(fixed)
-            inner, _ = filler._inputs(fixed)
-            return {f"{name}.{key}": value for key, value in inner.items()}
+            inner, _, fresh = filler._inputs(fixed)
+            return (
+                {prefix + key: value for key, value in inner.items()},
+                {prefix + key: make for key, make in fresh.items()},
+            )
         values = {path: _get(given, path) for path in filler._compiled.domains}
         for path, value in values.items():
             if not filler._compiled.domains[path].accepts(value):
@@ -467,7 +481,7 @@ class ModelFiller[T]:
                     f"({_contradiction(model.__name__, *conflict)}); "
                     "pass a dict or a valid instance"
                 )
-        return {name: given} | {f"{name}.{path}": value for path, value in values.items()}
+        return {name: given} | {prefix + path: value for path, value in values.items()}, {}
 
     def _nested_filler(self, name: str, model: type) -> ModelFiller[Any]:
         """The filler of a nested model field, with this filler's options and providers."""
@@ -501,21 +515,21 @@ class ModelFiller[T]:
         except ModelFillError as error:
             raise type(error)(f"{name}: {error}") from error
 
-    def _refresh(self, fixed_fields: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
-        """Another batch member's inputs: fresh provider, boring and nested values, but
-        the same solved ones; a provided nested model that is solved stays fixed."""
-        kept = {name: inputs[name] for name, _ in self._compiled.nested if name in inputs}
-        return self._inputs({**fixed_fields, **kept})[0]
-
-    def _inputs(self, fixed_fields: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
-        """Constructor inputs besides the solver's candidate, and the input names chosen.
+    def _inputs(
+        self, fixed_fields: dict[str, Any]
+    ) -> tuple[dict[str, Any], set[str], dict[str, Callable[[], Any]]]:
+        """Constructor inputs besides the solver's candidate, the input names chosen, and
+        how to make the inputs that each batch member gets afresh.
 
         Fixed solved values come first, a solved nested model's by path. For each field
         the solver does not model: the caller's value, with a dict for a nested model
         completed; else a provider; else the model's default; else a nested model's
-        canonical completion or a boring value.
+        canonical completion or a boring value. All but the caller's values are made
+        afresh, except what a provider gives a solved nested model: like the caller's
+        values, that fixes the solver's inputs for the whole call.
         """
         inputs: dict[str, Any] = {}
+        fresh: dict[str, Callable[[], Any]] = {}
         chosen, missing, solved_nested = set(), [], dict(self._compiled.nested)
         for field in self._compiled.adapter.fields:
             name, given = field.name, fixed_fields.get(field.name, MISSING)
@@ -527,32 +541,38 @@ class ModelFiller[T]:
             if name in solved_nested:  # Its fields join this solver.
                 try:
                     given = provider() if provider is not None else given
-                    inputs.update(self._nested_inputs(name, solved_nested[name], given))
+                    known, made = self._nested_inputs(name, solved_nested[name], given)
                 except ModelFillError as error:
                     raise type(error)(f"{name}: {error}") from error
+                inputs.update(known)
+                fresh.update(made)
                 continue
             nested = nested_model(field.annotation)
             if given is not MISSING:
-                completed = nested is not None and isinstance(given, dict)
-                inputs[name] = self._fill_nested(name, nested, given) if completed else given
+                if nested is not None and isinstance(given, dict):  # Completed.
+                    fresh[name] = partial(self._fill_nested, name, nested, given)
+                    inputs[name] = fresh[name]()
+                else:
+                    inputs[name] = given
                 continue
             if provider is not None:
-                inputs[name] = provider()
+                make = provider
             elif not field.required:
                 continue  # The model's own default applies.
             elif nested is not None and nested is field.annotation:
-                inputs[name] = self._fill_nested(name, nested, {})
-            elif (value := boring(field.annotation, field.metadata)) is not MISSING:
-                inputs[name] = value
+                make = partial(self._fill_nested, name, nested, {})
+            elif boring(field.annotation, field.metadata) is not MISSING:
+                make = partial(boring, field.annotation, field.metadata)
             else:
                 missing.append(name)
                 continue
+            inputs[name], fresh[name] = make(), make
             chosen.add(field.keyword)
         if missing:
             raise UnsupportedConstraint(
                 f"modelfill cannot generate {', '.join(missing)}; pass values or add providers"
             )
-        return inputs, chosen
+        return inputs, chosen, fresh
 
     def _describe(self, field: FieldSpec) -> dict[str, Any]:
         domain = field.domain

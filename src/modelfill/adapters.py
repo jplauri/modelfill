@@ -17,7 +17,16 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin, get_type_hints
 
 from annotated_types import Ge, GroupedMetadata, Gt, Le, Lt, MaxLen, MinLen, MultipleOf
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    GetPydanticSchema,
+    PlainValidator,
+    WrapValidator,
+)
 from pydantic.types import Strict
 from pydantic_core import PydanticUndefined
 
@@ -137,6 +146,20 @@ def _domain(annotation: Any) -> Domain | None:
 _SYMBOLS = {Gt: ">", Ge: ">=", Lt: "<", Le: "<="}
 # Pydantic's class for constraints that annotated-types lacks, such as a pattern.
 _GENERAL = type(Field(pattern="x").metadata[0])
+
+
+# Metadata that runs code while Pydantic validates a field.
+_CALLBACKS = (AfterValidator, BeforeValidator, PlainValidator, WrapValidator, GetPydanticSchema)
+
+
+def _runs_code(item: Any) -> bool:
+    """Whether metadata runs code: a validator, or a schema hook from outside Pydantic,
+    whose own markers, such as UuidVersion, only constrain."""
+    module = getattr(item, "__module__", None) or ""
+    foreign = module != "pydantic" and not module.startswith("pydantic.")
+    return isinstance(item, _CALLBACKS) or (
+        foreign and hasattr(item, "__get_pydantic_core_schema__")
+    )
 
 
 def _pattern(item: Any) -> Any:
@@ -343,7 +366,16 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         )
         rules: list[tuple[str, Expr]] = []
         pattern = None
-        if domain is not None:  # Pydantic itself validates values of external fields.
+        if domain is None:
+            # Pydantic validates an external field itself, but code in its metadata could
+            # replace a value that a rule reads, a required nested model's say, so it is
+            # unsupported logic, as a field validator of the field would be.
+            unsupported += [
+                f"Field {name!r}: unsupported metadata {item!r}"
+                for item in info.metadata
+                if _runs_code(item)
+            ]
+        else:
             metadata = list(info.metadata)
             if domain.kind == "str" and domain.choices is None:
                 # A field's own length limit overrides the global configuration.
@@ -355,7 +387,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
             rules, regex = _metadata_constraints(name, domain, metadata, unsupported)
             constraints.extend(rules)
             if regex is not None:
-                pattern = Pattern(regex, tuple(info.metadata), config.get("regex_engine"))
+                pattern = Pattern(regex, config.get("regex_engine"))
         # Pydantic skips field validation for an omitted default; that only matters
         # when the validation would have rejected the default.
         passes = (

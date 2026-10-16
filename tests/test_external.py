@@ -3,13 +3,14 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 import pytest
 from pydantic import (
     UUID1,
     UUID4,
+    AfterValidator,
     AwareDatetime,
     BaseModel,
     ConfigDict,
@@ -198,6 +199,26 @@ def test_each_batch_member_gets_its_own_provider_values():
     ids = iter(range(100))
     orders = ModelFiller(Order, providers={UUID: lambda: UUID(int=next(ids))}).batch(3)
     assert [(order.id.int, order.customer.id.int) for order in orders] == [(0, 1), (2, 3), (4, 5)]
+
+
+class Unbounded(BaseModel):
+    low: float = Field(ge=float("-inf"))
+    high: float = Field(le=float("inf"))
+
+
+def test_infinite_bounds_leave_zero():
+    assert fill(Unbounded) == Unbounded(low=0.0, high=0.0)
+    assert ModelFiller(Unbounded).explain()["fields"]["low"]["default"] == "boring value"
+
+
+class Sorted(BaseModel):
+    tags: Annotated[list[str], AfterValidator(lambda tags: sorted(tags))]
+
+
+def test_code_in_an_external_field_metadata_is_unsupported():
+    with pytest.raises(UnsupportedConstraint, match="'tags': unsupported metadata AfterValidator"):
+        ModelFiller(Sorted, mode="strict")
+    assert fill(Sorted).tags == []
 
 
 def test_a_rejected_boring_value_is_named_in_the_error():

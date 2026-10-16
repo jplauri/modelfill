@@ -132,9 +132,13 @@ def _number(limits: dict[type, Any]) -> Any:
     bounds = [
         getattr(limits[kind], kind.__name__.lower()) for kind in (Gt, Ge, Lt, Le) if kind in limits
     ]
-    # The multiples just around each bound include the nearest allowed one on its side.
+    # The multiples just around each bound include the nearest allowed one on its side;
+    # an infinite bound has none.
     candidates = [0] + [
-        (math.floor(bound / step) + offset) * step for bound in bounds for offset in (-1, 0, 1, 2)
+        (math.floor(bound / step) + offset) * step
+        for bound in bounds
+        if math.isfinite(bound)
+        for offset in (-1, 0, 1, 2)
     ]
     allowed = [value for value in candidates if fits(value)]
     if allowed:

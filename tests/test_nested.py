@@ -1,9 +1,10 @@
 """Rules across nested models: required nested models are solved with their parent."""
 
 from dataclasses import dataclass
+from typing import Annotated
 
 import pytest
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
 from modelfill import (
     GenerationExhausted,
@@ -201,6 +202,66 @@ def test_unchecked_nested_defaults_still_block_an_impossibility_claim():
         filler.fill()
     with pytest.raises(UnsatisfiableConstraints):
         filler.fill(account={"balance": -1})
+
+
+class Counter(BaseModel):
+    count: int = Field(ge=0)
+
+
+def negative_copy(counter):  # A new object: the input is left alone.
+    return counter.model_copy(update={"count": -counter.count - 1})
+
+
+class Flipped(BaseModel):
+    counter: Annotated[Counter, AfterValidator(negative_copy)]
+
+    @model_validator(mode="after")
+    def check(self):  # Reads the copy, not the Counter that met count >= 0.
+        if self.counter.count >= 0:
+            raise ValueError("the count must be negative after the copy")
+        return self
+
+
+def test_code_in_a_nested_model_field_metadata_is_unsupported():
+    # Solving count >= 0 and count < 0 together once claimed a contradiction.
+    with pytest.raises(UnsupportedConstraint, match="AfterValidator"):
+        ModelFiller(Flipped, mode="strict")
+    assert fill(Flipped).counter.count == -1
+
+
+class Leaf(BaseModel):
+    floor: int
+
+
+class Box(BaseModel):
+    leaf: Leaf
+
+
+class Envelope(BaseModel):
+    box: Box
+    serial: int
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.serial < self.box.leaf.floor:
+            raise ValueError("the serial is below the floor")
+        return self
+
+
+@pytest.mark.parametrize(
+    "path, provide",
+    [
+        ("box.leaf", lambda floor: Leaf(floor=floor)),
+        ("box.leaf", lambda floor: {"floor": floor}),
+        ("box", lambda floor: {"leaf": {"floor": floor}}),
+    ],
+)
+def test_a_provided_nested_model_stays_fixed_for_a_whole_batch(path, provide):
+    # Running the provider again for the second member once broke the floor that the
+    # solver had fixed.
+    floors = iter([0, 100])
+    filler = ModelFiller(Envelope, providers={path: lambda: provide(next(floors))}, max_attempts=3)
+    assert [(env.box.leaf.floor, env.serial) for env in filler.batch(2)] == [(0, 0), (0, 1)]
 
 
 def test_a_given_instance_must_keep_its_own_rules():

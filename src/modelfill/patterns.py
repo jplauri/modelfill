@@ -1,8 +1,8 @@
 """String patterns: Pydantic decides what matches, and a small automaton proposes values.
 
 The solver never sees a pattern, so it allows more values than Pydantic does, never
-fewer, and a proof of impossibility stays sound. Every candidate goes through the
-field's own validation instead. Python's regex parser reads the pattern only to
+fewer, and a proof of impossibility stays sound. Pydantic checks every candidate
+against the pattern instead. Python's regex parser reads the pattern only to
 propose values: a pattern it cannot read is still checked, just not spelled.
 """
 
@@ -20,7 +20,7 @@ from re import _constants as sre  # ty: ignore[unresolved-import]
 from re import _parser  # ty: ignore[unresolved-import]
 from typing import Annotated, Any, Literal
 
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 _TOP = 0x2FFFF  # Z3 strings end here, so spelled values do too.
 _STATES = 4096  # A larger automaton, as for x{1,9999}, is not spelled.
@@ -306,16 +306,14 @@ class Pattern:
     """A string field's pattern: Pydantic decides what matches; the automaton proposes."""
 
     def __init__(
-        self,
-        regex: str | re.Pattern[str],
-        metadata: tuple[Any, ...],
-        engine: Literal["rust-regex", "python-re"] | None,
+        self, regex: str | re.Pattern[str], engine: Literal["rust-regex", "python-re"] | None
     ) -> None:
         self.source = regex if isinstance(regex, str) else regex.pattern
-        # The field's own validation, so a value matches exactly when Pydantic says so,
-        # for either regex engine.
+        # Pydantic checks the pattern alone, so a value matches exactly when Pydantic says
+        # so, for either regex engine. The field's other metadata, such as a validator
+        # that reads info.data, runs only in the real constructor, with the model's data.
         config = ConfigDict(regex_engine=engine) if engine else None
-        self.validator = TypeAdapter(Annotated[str, *metadata], config=config)
+        self.validator = TypeAdapter(Annotated[str, Field(pattern=regex)], config=config)
         try:
             flags = 0 if isinstance(regex, str) else regex.flags
             self.automaton: _Automaton | None = _Automaton(self.source, flags)

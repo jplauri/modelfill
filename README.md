@@ -200,10 +200,10 @@ rule unless the dataclass's own code enforces it, so modelfill does not impose i
 ### String patterns
 
 A string field's `pattern`, from `Field`, `constr` or `StringConstraints`, never
-reaches the solver. Pydantic itself decides what matches: every candidate goes
-through the field's own validation, so any pattern Pydantic accepts, under either
-`regex_engine`, means exactly what it means in your model. modelfill reads the
-pattern with Python's regex parser only to spell values from it, as
+reaches the solver. Pydantic itself decides what matches: every candidate is
+checked against the pattern by Pydantic, so any pattern Pydantic accepts, under
+either `regex_engine`, means exactly what it means in your model. modelfill reads
+the pattern with Python's regex parser only to spell values from it, as
 [canonical values](#canonical-values) describes. A pattern it cannot read, such as
 one with Rust's `\p{L}`, is still checked; only the field's name-based candidates
 are tried for it.
@@ -264,7 +264,8 @@ candidate bounds; normal construction still runs every original validator. A
 candidate it rejects is excluded and the next canonical candidate is tried.
 Attempts alternate between preferring the guidance and ignoring it, so
 misleading guidance cannot starve the search, and the sequence is the same on
-every run. It tries at most `max_attempts` candidates and never claims UNSAT in
+every run. Guidance that leaves no candidate at all, such as a value its pattern
+rules out, is dropped for the rest of the call. It tries at most `max_attempts` candidates and never claims UNSAT in
 this fallback mode. This bounded search can miss valid solutions, especially
 narrow conditions or transformations.
 
@@ -440,7 +441,8 @@ assert (filler.fill().id, filler.fill().customer.id) == (UUID(int=7), UUID(int=9
 
 A provider is a zero-argument callable, run once per returned object like a default
 factory, so each batch member gets its own values; one that provides a required
-nested model, which is solved with its parent, fixes it for the whole call.
+nested model, which is solved with its parent, fixes it for the whole call, as an
+instance or a dict, at any depth.
 Providers apply only to fields the solver does not model, so one that targets a
 solved field, or a path that does not exist, fails when the filler is created.
 A field with no value from any source, such as one of an arbitrary class, raises
@@ -448,8 +450,9 @@ A field with no value from any source, such as one of an arbitrary class, raises
 `FutureDate`, whose validity depends on the clock. If Pydantic keeps rejecting a
 boring value, for example because of a custom validator, the search ends in
 `GenerationExhausted`, which names the field. Validators that read these fields
-remain unsupported logic, so a model with one falls back to the bounded search;
-so does a rule that reads an optional nested model or one with a default, and any
+remain unsupported logic, as does code in their metadata, such as an
+`AfterValidator`, so a model with either falls back to the bounded search; so does
+a rule that reads an optional nested model or one with a default, and any
 unsupported logic inside a nested model makes the whole object fall back.
 
 ## Exploration with Hypothesis
