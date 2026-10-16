@@ -441,7 +441,8 @@ assert (filler.fill().id, filler.fill().customer.id) == (UUID(int=7), UUID(int=9
 
 A provider is a zero-argument callable, run once per returned object like a default
 factory, so each batch member gets its own values; one that provides a required
-nested model, which is solved with its parent, fixes it for the whole call.
+nested model, which is solved with its parent, fixes it for the whole call, as an
+instance or a dict, at any depth.
 Providers apply only to fields the solver does not model, so one that targets a
 solved field, or a path that does not exist, fails when the filler is created.
 A field with no value from any source, such as one of an arbitrary class, raises

@@ -229,6 +229,41 @@ def test_code_in_a_nested_model_field_metadata_is_unsupported():
     assert fill(Flipped).counter.count == -1
 
 
+class Leaf(BaseModel):
+    floor: int
+
+
+class Box(BaseModel):
+    leaf: Leaf
+
+
+class Envelope(BaseModel):
+    box: Box
+    serial: int
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.serial < self.box.leaf.floor:
+            raise ValueError("the serial is below the floor")
+        return self
+
+
+@pytest.mark.parametrize(
+    "path, provide",
+    [
+        ("box.leaf", lambda floor: Leaf(floor=floor)),
+        ("box.leaf", lambda floor: {"floor": floor}),
+        ("box", lambda floor: {"leaf": {"floor": floor}}),
+    ],
+)
+def test_a_provided_nested_model_stays_fixed_for_a_whole_batch(path, provide):
+    # Running the provider again for the second member once broke the floor that the
+    # solver had fixed.
+    floors = iter([0, 100])
+    filler = ModelFiller(Envelope, providers={path: lambda: provide(next(floors))}, max_attempts=3)
+    assert [(env.box.leaf.floor, env.serial) for env in filler.batch(2)] == [(0, 0), (0, 1)]
+
+
 def test_a_given_instance_must_keep_its_own_rules():
     filler = ModelFiller(Wallet, mode="strict")
     # Pydantic keeps Account() with its unchecked default; modelfill would solve with

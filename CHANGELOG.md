@@ -38,7 +38,9 @@
   of drawing it with `st.from_type`, which overrode the provider.
 - Providers run once per returned object, as documented, so each `batch()` member
   gets its own values: a `uuid4` provider no longer gives every member the same id.
-  Boring values and nested completions are fresh per member too.
+  Boring values and nested completions are fresh per member too. A provider for a
+  required nested model, which is solved with its parent, fixes it for the whole
+  call, as an instance or a dict, at any depth.
 - A pattern value longer than Python's recursion limit, as for `^a{1500}$`, is
   spelled instead of raising `RecursionError`.
 - An empty validation alias, `Field(alias="")`, is passed as such instead of
