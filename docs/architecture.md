@@ -203,9 +203,12 @@ returned value never depends on machine speed. Resource use does depend on
 solver history, so close to the limit, whether a query finishes can depend on
 earlier calls; it then raises, and never returns a different value.
 
-The answer depends only on the fixed inputs and default values, so each thread
-caches canonical assignments by them (bounded): a repeated fill reruns only
-construction, and default factories still run once per call. `batch` excludes
+The first candidate depends only on the fixed inputs and default values, so each
+thread caches it by them (bounded) when it validates on the first try: whenever
+it validates again, a fresh search would return it too, so a repeated fill reruns
+only construction, and default factories still run once per call. A later
+candidate is never cached, because external values, which the key leaves out, may
+have rejected the ones before it. `batch` excludes
 each completion in turn, enumerating distinct completions in canonical order.
 Reusing a `ModelFiller` avoids repeated analysis. Each thread receives its own
 solver and private Z3 context; only compiled immutable information is shared.

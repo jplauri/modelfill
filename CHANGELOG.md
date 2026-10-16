@@ -22,6 +22,9 @@
   name, or an unknown name, is unsupported logic. Such a name used to read as
   `None`, so `if info is None: raise ValueError(...)` counted as always rejecting
   and modelfill claimed the model impossible.
+- A reused filler, including the cached one behind `fill()`, no longer returns an
+  earlier call's values when external values decide which candidate validates:
+  only a completion that validates on the first try is cached.
 
 ## 0.3.0
 

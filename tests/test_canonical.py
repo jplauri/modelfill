@@ -3,10 +3,10 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
 import pytest
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, Field, model_validator
 
 from examples.meeting import Meeting
 from modelfill import GenerationExhausted, ModelFiller, SolverTimeout, SolverUnknown, fill
@@ -147,6 +147,34 @@ def test_results_do_not_depend_on_earlier_calls():
     fill(Anchors)
     filler.fill(duration=2)
     assert filler.fill(start=10) == expected
+
+
+class ExternalFloor(BaseModel):  # The rule reads an external field, so it falls back.
+    floor: float
+    value: int
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.value < self.floor:
+            raise ValueError("below the floor")
+        return self
+
+
+def above_value(floor, info):
+    if info.data["value"] < floor:
+        raise ValueError("below the floor")
+    return floor
+
+
+class HiddenFloor(BaseModel):  # The same rule, on the external field: modelfill sees none.
+    value: int
+    floor: Annotated[float, AfterValidator(above_value)]
+
+
+@pytest.mark.parametrize("model", [ExternalFloor, HiddenFloor])
+def test_external_values_do_not_leak_into_later_calls(model):
+    filler = ModelFiller(model)
+    assert [filler.fill(floor=floor).value for floor in (2.0, 0.0, 2.0, 0.0)] == [2, 0, 2, 0]
 
 
 def test_results_do_not_depend_on_the_thread():

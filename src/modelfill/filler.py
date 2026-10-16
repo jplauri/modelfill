@@ -299,14 +299,18 @@ class ModelFiller[T]:
                 ):
                     defaults[name] = value
         solver = self._solver()
-        # A canonical completion depends only on these, so repeated fills reuse it.
+        # The first candidate depends only on these, and whenever it validates a fresh
+        # search returns it, so repeated fills reuse it. A later candidate may owe its
+        # turn to external values, which the key leaves out, so it is never kept.
+        # ponytail: a model whose first candidate fails searches on every fill; caching
+        # the candidate sequence would avoid that if fallback models get slow.
         key = (frozenset(solved.items()), tuple(defaults.items()))
         cache = self._local.cache
         if rng is None and count == 1 and key in cache:
             try:
                 return [self._construct(inputs, cache[key])]
             except (ValueError, AssertionError):
-                del cache[key]  # Validation is meant to be deterministic; search again.
+                pass  # These external values reject it; the search goes past it.
         last_error: Exception | None = None
         omitted = [name for name in self._compiled.unchecked if name not in solved]
         results: list[T] = []
@@ -359,11 +363,11 @@ class ModelFiller[T]:
                         ) from exc
                     failures, last_error = failures + 1, exc
                     continue
-                failures = 0
-                if rng is None and count == 1:
+                if rng is None and count == 1 and not failures:
                     if len(cache) >= 256:  # Bounded: forget the oldest assignment.
                         del cache[next(iter(cache))]
                     cache[key] = candidate
+                failures = 0
         if len(results) == count:
             return results
         found = f"found {len(results)} of {count} distinct completions; " if count > 1 else ""

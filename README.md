@@ -369,8 +369,8 @@ Canonical values are stable within a release but **not across versions**: a late
 release may choose differently. A test should fix every field it asserts on.
 
 The solver's hard domains have no arbitrary integer or string-length bounds.
-Each canonical assignment is cached per fixed inputs and default values, so a
-repeated fill only reruns construction. Each thread owns a separate Z3 context and
+A canonical assignment that validates on the first try is cached per fixed inputs
+and default values, so a repeated fill only reruns construction. Each thread owns a separate Z3 context and
 solver; immutable compiled information is shared, and compiled models and the
 convenience `fill()` fillers live in bounded caches. Treat model definitions and
 the Enum classes and constants their validators read as immutable after first
