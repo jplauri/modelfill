@@ -34,6 +34,8 @@
 - When Pydantic rejects a value modelfill chose for an external field, the search
   goes on instead of giving up: a validator of that field may read solved fields
   through `info.data`. If the search ends, the error still names the field.
+- `from_model` leaves a required external field to its configured provider instead
+  of drawing it with `st.from_type`, which overrode the provider.
 
 ## 0.3.0
 

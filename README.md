@@ -455,11 +455,12 @@ unsupported logic inside a nested model makes the whole object fall back.
 Canonical values are for tests that need *a* valid object. To hunt bugs, explore
 with `modelfill.hypothesis.from_model`, a Hypothesis strategy that needs the
 `hypothesis` extra. Pass strategies for the fields you want Hypothesis to drive;
-required external fields default to `st.from_type`, and modelfill solves the rest
-from the validators. Unlike `fill()`, it picks those values at random, often at
-the edges of their feasible ranges, where bugs tend to hide. To set `mode`,
-`max_attempts`, `work_limit`, `timeout_ms` or `providers`, pass a configured
-`ModelFiller` in place of the class, so options never collide with field names:
+required external fields without a provider default to `st.from_type`, and
+modelfill solves the rest from the validators. Unlike `fill()`, it picks those
+values at random, often at the edges of their feasible ranges, where bugs tend to
+hide. To set `mode`, `max_attempts`, `work_limit`, `timeout_ms` or `providers`,
+pass a configured `ModelFiller` in place of the class, so options never collide
+with field names:
 
 ```python
 from datetime import datetime, timedelta
