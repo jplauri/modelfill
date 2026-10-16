@@ -36,6 +36,9 @@
   through `info.data`. If the search ends, the error still names the field.
 - `from_model` leaves a required external field to its configured provider instead
   of drawing it with `st.from_type`, which overrode the provider.
+- Providers run once per returned object, as documented, so each `batch()` member
+  gets its own values: a `uuid4` provider no longer gives every member the same id.
+  Boring values and nested completions are fresh per member too.
 
 ## 0.3.0
 

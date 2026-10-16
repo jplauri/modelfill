@@ -197,9 +197,10 @@ class ModelFiller[T]:
     preferences, used when compatible with the rules and fixed values.
 
     ``providers`` maps a type, or a field path such as ``"customer.email"``, to a
-    zero-argument callable for fields the solver does not model. A path beats a type,
-    and a provider beats the model's default; otherwise such a field gets a boring
-    value, and a nested model its own canonical completion.
+    zero-argument callable for fields the solver does not model, run once per
+    returned object. A path beats a type, and a provider beats the model's default;
+    otherwise such a field gets a boring value, and a nested model its own canonical
+    completion.
     """
 
     def __init__(
@@ -365,6 +366,8 @@ class ModelFiller[T]:
                         del cache[next(iter(cache))]
                     cache[key] = candidate
                 failures = 0
+                if len(results) < count:  # Each member gets its own provider values.
+                    inputs = self._refresh(fixed_fields, inputs)
         if len(results) == count:
             return results
         found = f"found {len(results)} of {count} distinct completions; " if count > 1 else ""
@@ -497,6 +500,12 @@ class ModelFiller[T]:
             return self._nested_filler(name, model).fill(**fixed)
         except ModelFillError as error:
             raise type(error)(f"{name}: {error}") from error
+
+    def _refresh(self, fixed_fields: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+        """Another batch member's inputs: fresh provider, boring and nested values, but
+        the same solved ones; a provided nested model that is solved stays fixed."""
+        kept = {name: inputs[name] for name, _ in self._compiled.nested if name in inputs}
+        return self._inputs({**fixed_fields, **kept})[0]
 
     def _inputs(self, fixed_fields: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
         """Constructor inputs besides the solver's candidate, and the input names chosen.

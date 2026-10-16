@@ -194,6 +194,12 @@ class Narrow(BaseModel):
     price: Decimal = Field(max_digits=2, decimal_places=2, ge=Decimal("0.5"))
 
 
+def test_each_batch_member_gets_its_own_provider_values():
+    ids = iter(range(100))
+    orders = ModelFiller(Order, providers={UUID: lambda: UUID(int=next(ids))}).batch(3)
+    assert [(order.id.int, order.customer.id.int) for order in orders] == [(0, 1), (2, 3), (4, 5)]
+
+
 def test_a_rejected_boring_value_is_named_in_the_error():
     with pytest.raises(GenerationExhausted, match="value chosen for price; pass a value"):
         fill(Narrow)
