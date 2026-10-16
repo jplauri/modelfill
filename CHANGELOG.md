@@ -56,6 +56,8 @@
 - In fallback mode, guidance that leaves no candidate at all, such as a value its
   pattern rules out, gives way to an unguided candidate instead of ending the
   search.
+- An infinite bound on an external number, such as `Field(ge=float("-inf"))`, no
+  longer makes `fill()` and `explain()` raise `OverflowError`.
 
 ## 0.3.0
 

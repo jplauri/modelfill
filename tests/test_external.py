@@ -201,6 +201,16 @@ def test_each_batch_member_gets_its_own_provider_values():
     assert [(order.id.int, order.customer.id.int) for order in orders] == [(0, 1), (2, 3), (4, 5)]
 
 
+class Unbounded(BaseModel):
+    low: float = Field(ge=float("-inf"))
+    high: float = Field(le=float("inf"))
+
+
+def test_infinite_bounds_leave_zero():
+    assert fill(Unbounded) == Unbounded(low=0.0, high=0.0)
+    assert ModelFiller(Unbounded).explain()["fields"]["low"]["default"] == "boring value"
+
+
 class Sorted(BaseModel):
     tags: Annotated[list[str], AfterValidator(lambda tags: sorted(tags))]
 
