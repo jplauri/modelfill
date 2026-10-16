@@ -145,6 +145,13 @@ def test_alias_construction_uses_canonical_public_field_names():
         adapter.check_fixed({"Count": 4})
 
 
+def test_an_empty_alias_is_still_an_alias():
+    class Aliased(BaseModel):
+        count: int = Field(alias="")
+
+    assert introspect(Aliased).construct({"count": 4}).count == 4
+
+
 def test_alias_configuration_across_pydantic_versions():
     class Aliased(BaseModel):
         # Before v2.11 these keys are ignored by Pydantic, so aliases still apply.

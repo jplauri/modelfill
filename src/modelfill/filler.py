@@ -547,7 +547,7 @@ class ModelFiller[T]:
             else:
                 missing.append(name)
                 continue
-            chosen.add(field.input_name or name)
+            chosen.add(field.keyword)
         if missing:
             raise UnsupportedConstraint(
                 f"modelfill cannot generate {', '.join(missing)}; pass values or add providers"

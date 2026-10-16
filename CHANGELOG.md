@@ -41,6 +41,8 @@
   Boring values and nested completions are fresh per member too.
 - A pattern value longer than Python's recursion limit, as for `^a{1500}$`, is
   spelled instead of raising `RecursionError`.
+- An empty validation alias, `Field(alias="")`, is passed as such instead of
+  being mistaken for no alias.
 
 ## 0.3.0
 
