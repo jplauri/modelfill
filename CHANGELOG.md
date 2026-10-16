@@ -68,6 +68,11 @@
 - In fallback mode, a batch member whose provider values differ first tries again
   the candidates that earlier members tried: one rejected under earlier values, or
   turned into another object, can fit the new ones, but stayed excluded.
+- A failing default factory of an external field propagates, as documented,
+  instead of counting as a rejection and ending in `GenerationExhausted`. Only
+  `ValidationError` rejects a candidate for a Pydantic model, which wraps its
+  validators' errors in it; a dataclass still rejects with `ValueError` or
+  `AssertionError` from `__post_init__`, and its factories now run before it.
 
 ## 0.3.0
 

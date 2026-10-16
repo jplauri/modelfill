@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from functools import lru_cache, partial
 from typing import Any, Literal, Union, get_args, get_origin
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from .adapters import MISSING, Adapter, FieldSpec, _domain, introspect
 from .backend import Solver
@@ -56,6 +56,11 @@ class _Compiled:
 
 
 _COMPILING = threading.local()  # The models being compiled, to stop a model nesting itself.
+
+
+class _Rejected(Exception):
+    """A candidate turned down, as a constructor signals it or by the checks on what it
+    returned; anything else raised during construction is an error and propagates."""
 
 
 def _relabel(label: str, prefix: str) -> str:
@@ -310,9 +315,9 @@ class ModelFiller[T]:
         if rng is None and count == 1 and key in cache:
             try:
                 return [self._construct(inputs, cache[key])]
-            except (ValueError, AssertionError):
+            except _Rejected:
                 pass  # These external values reject it; the search goes past it.
-        last_error: Exception | None = None
+        last_error: BaseException | None = None
         omitted = [name for name in self._compiled.unchecked if name not in solved]
         results: list[T] = []
         seen: set[tuple[Any, ...]] = set()  # The results' generated values.
@@ -363,10 +368,10 @@ class ModelFiller[T]:
                     tried.append(candidate)
                 try:
                     instance = self._construct(inputs, candidate)
-                except (ValueError, AssertionError) as exc:
+                except _Rejected as exc:
                     # Even an error at a value chosen for another field may depend on the
                     # solved fields, through info.data, so the search goes on.
-                    failures, last_error = failures + cost, exc
+                    failures, last_error = failures + cost, exc.__cause__ or exc
                     continue
                 # Unsupported logic can turn different candidates into equal objects.
                 generated = tuple(_get(instance, name) for name in candidate)
@@ -430,7 +435,7 @@ class ModelFiller[T]:
         ]
         if isinstance(instance, self.model) and not invalid and not changed:
             return instance
-        raise ValueError(
+        raise _Rejected(
             f"Validation changed fixed fields {changed} or returned noncanonical "
             f"fields {invalid} / an incompatible object"
         )
@@ -456,7 +461,11 @@ class ModelFiller[T]:
                     if key.startswith(prefix)
                 }
                 local[name] = self._nested_filler(name, model)._assemble(inner)
-        return self._compiled.adapter.construct(local)
+        adapter = self._compiled.adapter
+        try:
+            return adapter.construct(local)
+        except adapter.rejections as exc:
+            raise _Rejected from exc
 
     def _nested_inputs(
         self, name: str, model: type, given: Any
@@ -572,7 +581,11 @@ class ModelFiller[T]:
             if provider is not None:
                 make = provider
             elif not field.required:
-                continue  # The model's own default applies.
+                # A dataclass runs its factory unvalidated, so it may as well run here,
+                # where what it raises cannot pass for __post_init__ turning one down.
+                if field.default_factory is None or issubclass(self.model, BaseModel):
+                    continue  # The model's own default applies.
+                make = field.default_factory
             elif nested is not None and nested is field.annotation:
                 make = partial(self._fill_nested, name, nested, {})
             elif boring(field.annotation, field.metadata) is not MISSING:

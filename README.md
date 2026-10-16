@@ -265,15 +265,17 @@ candidate it rejects is excluded and the next canonical candidate is tried.
 Attempts alternate between preferring the guidance and ignoring it, so
 misleading guidance cannot starve the search, and the sequence is the same on
 every run. Guidance that leaves no candidate at all, such as a value its pattern
-rules out, is dropped for the rest of the call. It tries at most `max_attempts` candidates and never claims UNSAT in
-this fallback mode. This bounded search can miss valid solutions, especially
-narrow conditions or transformations.
+rules out, is dropped for the rest of the call. It tries at most `max_attempts`
+candidates and never claims UNSAT in this fallback mode. This bounded search can
+miss valid solutions, especially narrow conditions or transformations.
 
-Only `ValueError` (including Pydantic `ValidationError`) and `AssertionError`
-from ordinary construction are treated as candidate rejection. Other Python
-exceptions propagate so programming errors are visible. Default-factory
-exceptions also propagate. Validation is not sandboxed: do not use side effects
-or nondeterministic validators. Solver timeouts cannot interrupt Python code.
+A candidate counts as rejected only when construction turns it down the way its
+kind of model does: with `ValidationError` from a Pydantic model, which wraps its
+validators' errors, or with `ValueError` or `AssertionError` from a dataclass's
+`__post_init__`. Any other exception propagates so programming errors are visible,
+including one from a default factory. Validation is not sandboxed: do not use side
+effects or nondeterministic validators. Solver timeouts cannot interrupt Python
+code.
 
 Z3 string values cover U+0000–U+2FFFF, including ordinary text and emoji. Fixed
 strings outside this range are explicitly unsupported. Such literals in a

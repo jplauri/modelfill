@@ -1,6 +1,6 @@
 """Fields the solver does not model: boring values, nested models and providers."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, time
 from decimal import Decimal
 from typing import Annotated, Any
@@ -262,6 +262,28 @@ def test_a_batch_member_retries_candidates_under_its_own_provider_values():
     assert [(each.number, each.floor) for each in floored.batch(2)] == [(2, 2.0), (0, 0.0)]
     shifted = ModelFiller(ShiftedNumber, providers={"shift": lambda: next(shifts)}, max_attempts=3)
     assert [each.number for each in shifted.batch(2)] == [2, 0]
+
+
+def broken():
+    raise ValueError("factory failure")
+
+
+class BrokenDefault(BaseModel):
+    number: int = Field(ge=0, le=2)
+    id: UUID = Field(default_factory=broken)
+
+
+@dataclass
+class BrokenDataclass:
+    number: int
+    tags: list[str] = field(default_factory=broken)
+
+
+@pytest.mark.parametrize("model", [BrokenDefault, BrokenDataclass])
+def test_a_failing_default_factory_propagates(model):
+    # Its error once counted as a rejection, retried until GenerationExhausted.
+    with pytest.raises(ValueError, match="factory failure"):
+        ModelFiller(model, max_attempts=3).fill()
 
 
 def test_a_rejected_boring_value_is_named_in_the_error():

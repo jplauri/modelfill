@@ -36,6 +36,7 @@ from pydantic import (
     PlainSerializer,
     Tag,
     UrlConstraints,
+    ValidationError,
     WrapSerializer,
 )
 from pydantic.types import PathType, Strict, UuidVersion
@@ -117,6 +118,15 @@ class Adapter:
             field.keyword: values[field.name] for field in self.fields if field.name in values
         }
         return self.model(**inputs)
+
+    @property
+    def rejections(self) -> tuple[type[Exception], ...]:
+        """What the constructor raises to turn values down. Pydantic wraps its validators'
+        errors in ValidationError, so any other error it lets out, such as a default
+        factory's, is not a rejection; a dataclass's __post_init__ raises them itself."""
+        if issubclass(self.model, BaseModel):
+            return (ValidationError,)
+        return (ValueError, AssertionError)
 
     def check_fixed(self, values: dict[str, Any]) -> None:
         """The public API takes canonical field names and exact Python types."""
