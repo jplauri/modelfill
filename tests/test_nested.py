@@ -201,3 +201,13 @@ def test_unchecked_nested_defaults_still_block_an_impossibility_claim():
         filler.fill()
     with pytest.raises(UnsatisfiableConstraints):
         filler.fill(account={"balance": -1})
+
+
+def test_a_given_instance_must_keep_its_own_rules():
+    filler = ModelFiller(Wallet, mode="strict")
+    # Pydantic keeps Account() with its unchecked default; modelfill would solve with
+    # balance >= 0 and claim a contradiction, so the instance itself is refused.
+    with pytest.raises(ValueError, match=r"breaks its own rules.*balance >= 0"):
+        filler.fill(account=Account())
+    with pytest.raises(UnsatisfiableConstraints):  # A valid instance the parent rejects.
+        filler.fill(account=Account(balance=5))

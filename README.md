@@ -389,7 +389,8 @@ A field of any other type, such as a UUID, a float, a list or a nested model, ta
 its value from the first of these:
 
 1. your value. For a nested model, a dict fixes some of its fields and modelfill
-   completes the rest;
+   completes the rest; an instance is used as it is, so it must keep its own
+   model's rules, which Pydantic does not check again;
 2. a provider, keyed by field path or by type; a path beats a type;
 3. the model's own default;
 4. for a nested model, its canonical completion; otherwise a boring value. A

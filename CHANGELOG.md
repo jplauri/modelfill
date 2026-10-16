@@ -25,6 +25,10 @@
 - A reused filler, including the cached one behind `fill()`, no longer returns an
   earlier call's values when external values decide which candidate validates:
   only a completion that validates on the first try is cached.
+- A given nested instance that breaks its own model's rules, such as `Account()`
+  keeping an unchecked default `balance=-1` despite `ge=0`, raises `ValueError`
+  instead of a false `UnsatisfiableConstraints`. Pydantic does not check such an
+  instance again, but modelfill solves with its rules.
 
 ## 0.3.0
 

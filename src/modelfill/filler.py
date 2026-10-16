@@ -433,7 +433,9 @@ class ModelFiller[T]:
         """A solved nested model's inputs by path, such as "customer.age".
 
         A dict fixes some of its fields, as in any fill. A given instance is used as it
-        is, and its solved values become fixed, so this model's rules see them.
+        is, and its solved values become fixed, so this model's rules see them. It must
+        keep its own model's rules too: Pydantic does not check them again, but this
+        model's solver holds its values to them.
         """
         filler = self._nested_filler(name, model)
         if given is MISSING or isinstance(given, dict):
@@ -445,6 +447,18 @@ class ModelFiller[T]:
         for path, value in values.items():
             if not filler._compiled.domains[path].accepts(value):
                 raise TypeError(f"{name}.{path} of the given {model.__name__} is {value!r}")
+        # One that breaks them, by keeping an unchecked default say, is an input error,
+        # not a contradiction.
+        solver = filler._solver()
+        with solver.session(values):
+            if not solver.check():
+                conflict = solver.conflict(values, filler._compiled.constraints)
+                raise ValueError(
+                    f"{name}: the given instance breaks its own rules, which Pydantic does "
+                    f"not check again but modelfill solves with "
+                    f"({_contradiction(model.__name__, *conflict)}); "
+                    "pass a dict or a valid instance"
+                )
         return {name: given} | {f"{name}.{path}": value for path, value in values.items()}
 
     def _nested_filler(self, name: str, model: type) -> ModelFiller[Any]:

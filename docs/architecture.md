@@ -149,7 +149,11 @@ paths; reading the nested object as a whole stays unsupported, because the
 solver only knows its fields. Construction builds each nested object from its
 solved values and its own external fields, innermost first, then the parent. A
 given nested instance is used as it is, and its solved values become fixed, so
-the parent's rules see them.
+the parent's rules see them. Pydantic does not validate it again by default, so
+an instance that breaks its own model's rules, such as one keeping an unchecked
+default, would turn those rules into a false contradiction; it is refused as an
+input error instead. Dropping its rules for that call would be more faithful, but
+only under its model's default `revalidate_instances="never"`.
 
 Unsupported logic inside a nested model counts for the whole object: an unknown
 hook there could change values the parent's rules read, so every predicate is
