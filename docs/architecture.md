@@ -260,7 +260,11 @@ least character. The length is the one nearest the name's if a value can start
 with its first letter, and the shortest otherwise. Python's and Rust's syntax and
 Unicode tables differ in corners, such as `\w` or nested sets, but a value the
 automaton gets wrong is merely rejected by Pydantic. A pattern the parser cannot
-read, or whose automaton would exceed 4096 states, is only checked.
+read, or whose automaton would exceed 4096 states, is only checked. So is one that
+takes more than 65536 sequences to read, since repeating something that reads
+nothing, such as the empty group in `(){1000000}`, adds no state to count; an
+empty repeated body, as in `(?:){1000000}`, simply reads as nothing. This bounds
+compilation, which no solver budget covers.
 
 Among a field's candidates, the first spelled value comes right after the
 name's, so different fields keep values of their own; the strings that rules and

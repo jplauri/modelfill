@@ -20,6 +20,7 @@ from pydantic import (
 )
 
 from modelfill import GenerationExhausted, ModelFiller, UnsatisfiableConstraints, fill
+from modelfill.patterns import Pattern
 
 
 class Product(BaseModel):
@@ -224,6 +225,18 @@ class Loud(BaseModel):
 
 def test_guidance_that_leaves_no_candidate_gives_way():
     assert fill(Loud).code == "CODE"  # From the unguided candidate "code".
+
+
+class Blank(BaseModel):
+    text: str = Field(pattern=r"^(?:){100000}$")
+
+
+def test_repeats_of_nothing_are_read_within_a_budget():
+    # Repeating something that reads nothing adds no states, so the state limit never
+    # stopped it: (?:){1000000000} looped a billion times. Counts here stay small, so a
+    # regression cannot hang.
+    assert fill(Blank).text == ""  # An empty body, however often, reads as nothing.
+    assert Pattern(r"^(){100000}$", None).automaton is None  # A group of nothing: too long.
 
 
 DEEP = sys.getrecursionlimit() + 100  # One character per level once overflowed the stack.

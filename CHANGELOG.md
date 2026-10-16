@@ -73,6 +73,11 @@
   `ValidationError` rejects a candidate for a Pydantic model, which wraps its
   validators' errors in it; a dataclass still rejects with `ValueError` or
   `AssertionError` from `__post_init__`, and its factories now run before it.
+- Reading a pattern to spell values is bounded in work, not only in states. A
+  repeat of something that reads nothing, as in `^(?:){1000000000}$`, adds no
+  states, so it once looped for each repetition when the model was compiled; an
+  empty body now reads as nothing, and any other pattern past the bound is still
+  checked, just not spelled.
 
 ## 0.3.0
 
