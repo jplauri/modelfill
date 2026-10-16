@@ -65,6 +65,9 @@
   Pydantic. The globals used to replace them, so modelfill claimed such models
   impossible. Boring values meet grouped constraints too, as for
   `conlist(int, min_length=2)`.
+- In fallback mode, a batch member whose provider values differ first tries again
+  the candidates that earlier members tried: one rejected under earlier values, or
+  turned into another object, can fit the new ones, but stayed excluded.
 
 ## 0.3.0
 

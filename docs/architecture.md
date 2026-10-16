@@ -222,6 +222,10 @@ only construction, and default factories still run once per call. A later
 candidate is never cached, because external values, which the key leaves out, may
 have rejected the ones before it. `batch` excludes
 each completion in turn, enumerating distinct completions in canonical order.
+Exclusions outlive a member's provider values only while the model is fully
+modeled, since then external values cannot change which candidates validate or
+what they become. Under unsupported logic, a member whose values differ first tries
+again, in order and without spending attempts, the candidates tried before.
 Reusing a `ModelFiller` avoids repeated analysis. Each thread receives its own
 solver and private Z3 context; only compiled immutable information is shared.
 Compilation and the top-level convenience filler use bounded LRU caches keyed by

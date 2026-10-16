@@ -20,6 +20,7 @@ from pydantic import (
     HttpUrl,
     conlist,
     field_validator,
+    model_validator,
 )
 
 from modelfill import (
@@ -230,6 +231,37 @@ def test_code_in_an_external_field_metadata_is_unsupported():
     with pytest.raises(UnsupportedConstraint, match="'tags': unsupported metadata AfterValidator"):
         ModelFiller(Sorted, mode="strict")
     assert fill(Sorted).tags == []
+
+
+class FlooredNumber(BaseModel):  # The rule reads the provided floor, so it falls back.
+    number: int = Field(ge=0, le=2)
+    floor: float
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.number < self.floor:
+            raise ValueError("the number is below the floor")
+        return self
+
+
+class ShiftedNumber(BaseModel):
+    shift: float
+    number: int = Field(ge=0, le=0)
+
+    @field_validator("number")
+    @classmethod
+    def add_shift(cls, number, info):  # Unsupported: it changes the value.
+        return number + int(info.data["shift"])
+
+
+def test_a_batch_member_retries_candidates_under_its_own_provider_values():
+    # Under the first member's values number=0 failed, or became 2, and it stayed
+    # excluded, though the second member's values make it fit.
+    floors, shifts = iter([2.0, 0.0]), iter([2.0, 0.0])
+    floored = ModelFiller(FlooredNumber, providers={"floor": lambda: next(floors)}, max_attempts=3)
+    assert [(each.number, each.floor) for each in floored.batch(2)] == [(2, 2.0), (0, 0.0)]
+    shifted = ModelFiller(ShiftedNumber, providers={"shift": lambda: next(shifts)}, max_attempts=3)
+    assert [each.number for each in shifted.batch(2)] == [2, 0]
 
 
 def test_a_rejected_boring_value_is_named_in_the_error():

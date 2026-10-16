@@ -361,10 +361,12 @@ of `a`–`z`, `A`–`Z`, `0`–`9` that fits:
 | `phone: str = Field(pattern=r"^\+?[1-9]\d{1,14}$")` | `10` |
 
 `batch(count)` returns `count` distinct completions, compared on the validated
-objects' generated fields, in canonical order: the canonical completion, then the canonical
-completion of what remains once each earlier one is excluded. It raises
+objects' generated fields, in canonical order: the canonical completion, then the
+canonical completion of what remains once each earlier one is excluded. It raises
 `GenerationExhausted` when fewer distinct valid completions exist or can be found
-within the budget.
+within the budget. When each member gets its own provider values and unsupported
+logic could judge candidates by them, a member first tries again, in order, the
+candidates that earlier members tried.
 
 Canonical values are stable within a release but **not across versions**: a later
 release may choose differently. A test should fix every field it asserts on.

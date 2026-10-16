@@ -334,37 +334,44 @@ class ModelFiller[T]:
                     )
                 given, rules = solver.conflict(solved, self._compiled.constraints)
                 raise UnsatisfiableConstraints(_contradiction(self.model.__name__, given, rules))
+            tried: list[dict[str, Any]] = []  # Every candidate so far, in order; all blocked.
+            again: list[dict[str, Any]] = []  # Tried ones to try under new external values.
             while len(results) < count and failures < self.max_attempts:
-                if (results or failures) and not solver.check():
-                    break  # Every remaining candidate has been tried.
-                # Alternate, so guidance misled by an unknown hook cannot starve the search,
-                # and go without it when it leaves no candidate at all.
-                for guided in (True, False) if guidance and failures % 2 == 0 else (False,):
-                    try:
-                        if rng is None:
-                            candidate = solver.canonical(solved, defaults, guided=guided)
-                        else:
-                            candidate = solver.candidate(solved, defaults, rng, guided=guided)
-                        break
-                    except GenerationExhausted as exc:
-                        stuck = str(exc)  # No readable or matching string remains, say.
-                        if guided:  # Excluding more candidates could never bring one back.
-                            guidance = False
+                cost = 0 if again else 1  # A retry costs no attempt: there are only so many.
+                if again:
+                    candidate = again.pop(0)
                 else:
-                    break
-                stuck = ""
-                solver.block(candidate)  # Retries and batch members must differ.
+                    if (results or failures) and not solver.check():
+                        break  # Every remaining candidate has been tried.
+                    # Alternate, so guidance misled by an unknown hook cannot starve the
+                    # search, and go without it when it leaves no candidate at all.
+                    for guided in (True, False) if guidance and failures % 2 == 0 else (False,):
+                        try:
+                            if rng is None:
+                                candidate = solver.canonical(solved, defaults, guided=guided)
+                            else:
+                                candidate = solver.candidate(solved, defaults, rng, guided=guided)
+                            break
+                        except GenerationExhausted as exc:
+                            stuck = str(exc)  # No readable or matching string remains, say.
+                            if guided:  # Excluding more candidates never brings one back.
+                                guidance = False
+                    else:
+                        break
+                    stuck = ""
+                    solver.block(candidate)  # Retries and batch members must differ.
+                    tried.append(candidate)
                 try:
                     instance = self._construct(inputs, candidate)
                 except (ValueError, AssertionError) as exc:
                     # Even an error at a value chosen for another field may depend on the
                     # solved fields, through info.data, so the search goes on.
-                    failures, last_error = failures + 1, exc
+                    failures, last_error = failures + cost, exc
                     continue
                 # Unsupported logic can turn different candidates into equal objects.
                 generated = tuple(_get(instance, name) for name in candidate)
                 if generated in seen:
-                    failures += 1
+                    failures += cost
                     continue
                 seen.add(generated)
                 results.append(instance)
@@ -374,7 +381,14 @@ class ModelFiller[T]:
                     cache[key] = candidate
                 failures = 0
                 if len(results) < count:  # Each member gets its own provider values.
+                    previous = inputs
                     inputs = inputs | {path: make() for path, make in fresh.items()}
+                    # Unsupported logic may judge a candidate by these values, or turn it
+                    # into another object, so earlier verdicts lapse: the candidates tried
+                    # so far get another try, in order, before any new one.
+                    # ponytail: each member retries them all, quadratic in a long batch.
+                    if self._compiled.unsupported and inputs != previous:
+                        again = list(tried)
         if len(results) == count:
             return results
         found = f"found {len(results)} of {count} distinct completions; " if count > 1 else ""
