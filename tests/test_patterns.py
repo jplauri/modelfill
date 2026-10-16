@@ -2,6 +2,7 @@
 
 import random
 import re
+import sys
 from typing import Annotated
 
 import pytest
@@ -181,3 +182,14 @@ def test_long_fixed_lengths_are_reached():
     assert fill(Digest).sha512 == "a" * 128
     explored = ModelFiller(Digest)._complete({}, 1, random.Random(0))[0]  # As from_model does.
     assert len(explored.sha512) == 128
+
+
+DEEP = sys.getrecursionlimit() + 100  # One character per level once overflowed the stack.
+
+
+class Blob(BaseModel):
+    data: str = Field(pattern=f"^a{{{DEEP}}}$")
+
+
+def test_values_longer_than_the_recursion_limit_are_spelled():
+    assert fill(Blob).data == "a" * DEEP

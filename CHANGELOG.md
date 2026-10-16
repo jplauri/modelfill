@@ -39,6 +39,8 @@
 - Providers run once per returned object, as documented, so each `batch()` member
   gets its own values: a `uuid4` provider no longer gives every member the same id.
   Boring values and nested completions are fresh per member too.
+- A pattern value longer than Python's recursion limit, as for `^a{1500}$`, is
+  spelled instead of raising `RecursionError`.
 
 ## 0.3.0
 

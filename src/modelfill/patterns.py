@@ -269,19 +269,26 @@ class _Automaton:
         """Values of one size in canonical order: the name's letters while the value still
         spells the name, then a-z, A-Z, 0-9, then each set's least character."""
 
-        def walk(states: frozenset[int], prefix: str) -> Iterator[str]:
+        def steps(states: frozenset[int], prefix: str) -> Iterator[tuple[frozenset[int], str]]:
             index = len(prefix)
-            if index == size:
-                yield prefix
-                return
             later = self.reachable(size - index - 1)
             own = name[index : index + 1] if prefix.lower() == name[:index].lower() else ""
             for char in dict.fromkeys([*own, *own.swapcase(), *self.options(states)]):
                 following = self.targets(states, ord(char))
                 if following & later:
-                    yield from walk(self.closed(following), prefix + char)
+                    yield self.closed(following), prefix + char
 
-        yield from walk(self.first(), "")
+        # Depth first with an explicit stack: a value may be longer than Python's
+        # recursion limit.
+        stack = [iter([(self.first(), "")])]
+        while stack:
+            step = next(stack[-1], None)
+            if step is None:
+                stack.pop()
+            elif len(step[1]) == size:
+                yield step[1]
+            else:
+                stack.append(steps(*step))
 
     def sample(self, rng: random.Random, size: int) -> str:
         """A random value of one size; reachability rules out dead ends."""
