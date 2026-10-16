@@ -43,6 +43,10 @@
   spelled instead of raising `RecursionError`.
 - An empty validation alias, `Field(alias="")`, is passed as such instead of
   being mistaken for no alias.
+- Code in an external field's metadata, such as an `AfterValidator` or a custom
+  schema hook, is unsupported logic, as a field validator of that field already
+  was. On a required nested model it could replace the object the parent's rules
+  read, so modelfill claimed models impossible that Pydantic accepts.
 
 ## 0.3.0
 

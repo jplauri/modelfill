@@ -127,7 +127,10 @@ canonical completion or a fixed boring value, in that order, and they pass to th
 constructor, which validates them as usual; only solved fields must keep their
 exact type. They cannot weaken an UNSAT claim, because no extracted predicate can
 mention them: a validator that reads an external field is unsupported, which
-already rules out UNSAT. A nested model is completed by its own filler, so a
+already rules out UNSAT. Code in an external field's metadata, such as an
+`AfterValidator`, is unsupported too: on a required nested model it could replace
+the object whose fields the parent's rules read, after that model's own rules
+held for the original. A nested model is completed by its own filler, so a
 contradiction among a nested dict's fields is proven by that filler's solver and
 is a genuine impossibility for the outer model too. When Pydantic rejects a
 boring or provided value, the search goes on: an error's location says where it

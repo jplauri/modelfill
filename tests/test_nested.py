@@ -1,9 +1,10 @@
 """Rules across nested models: required nested models are solved with their parent."""
 
 from dataclasses import dataclass
+from typing import Annotated
 
 import pytest
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
 from modelfill import (
     GenerationExhausted,
@@ -201,6 +202,31 @@ def test_unchecked_nested_defaults_still_block_an_impossibility_claim():
         filler.fill()
     with pytest.raises(UnsatisfiableConstraints):
         filler.fill(account={"balance": -1})
+
+
+class Counter(BaseModel):
+    count: int = Field(ge=0)
+
+
+def negative_copy(counter):  # A new object: the input is left alone.
+    return counter.model_copy(update={"count": -counter.count - 1})
+
+
+class Flipped(BaseModel):
+    counter: Annotated[Counter, AfterValidator(negative_copy)]
+
+    @model_validator(mode="after")
+    def check(self):  # Reads the copy, not the Counter that met count >= 0.
+        if self.counter.count >= 0:
+            raise ValueError("the count must be negative after the copy")
+        return self
+
+
+def test_code_in_a_nested_model_field_metadata_is_unsupported():
+    # Solving count >= 0 and count < 0 together once claimed a contradiction.
+    with pytest.raises(UnsupportedConstraint, match="AfterValidator"):
+        ModelFiller(Flipped, mode="strict")
+    assert fill(Flipped).counter.count == -1
 
 
 def test_a_given_instance_must_keep_its_own_rules():

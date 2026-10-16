@@ -166,7 +166,7 @@ def above_value(floor, info):
     return floor
 
 
-class HiddenFloor(BaseModel):  # The same rule, on the external field: modelfill sees none.
+class HiddenFloor(BaseModel):  # The same rule, in the external field's metadata.
     value: int
     floor: Annotated[float, AfterValidator(above_value)]
 
