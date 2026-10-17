@@ -219,7 +219,7 @@ the rules and a pattern cannot both hold, though, the result is
 | Construct | Accepted forms |
 | --- | --- |
 | Statements | `if` / `elif` / `else`, `pass`, string docstrings, `assert`, supported `raise`, supported `return`, single-name local assignments (`x = …`, `x: T = …`) outside branches, other than to validator parameters |
-| Rejection | `raise ValueError` with any message, including f-strings (messages only run on paths that already reject), without a `from` clause; a failing `assert`, which `python -O` removes as usual |
+| Rejection | `raise` of builtin `ValueError` or `AssertionError`, or of `PydanticCustomError`, with any message, including f-strings, and any `from` clause (both only run on paths that already reject); a failing `assert`, which `python -O` removes as usual |
 | Successful return | Original `self` for model validators, original value for field validators; bare return, `return None`, or fallthrough for dataclasses |
 | References | `self.field`, and `self.customer.age` through required nested models; field validator value parameter, or its fields when it validates a nested model; `info.data["earlier_field"]`; previously assigned locals; named constants and standard Enum members from globals/closures |
 | Constants | Integer, Boolean, string, `None`; `date(…)`, `datetime(…)` and `timedelta(…)` calls with integer literal arguments |

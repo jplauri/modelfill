@@ -10,6 +10,7 @@ from enum import Enum, IntEnum
 from types import SimpleNamespace
 
 import pytest
+from pydantic_core import PydanticCustomError
 
 from modelfill.backend import Solver
 from modelfill.errors import UnsupportedConstraint
@@ -130,6 +131,16 @@ def modulo_and_constants(self):
     return self
 
 
+def other_rejections(self):
+    if self.a < 0:
+        raise AssertionError("negative")
+    if self.b == self.a:
+        raise PydanticCustomError("equal", "a and b must differ")
+    if self.b > 4:
+        raise ValueError("large") from None
+    return self
+
+
 @pytest.mark.parametrize(
     "validator",
     [
@@ -145,6 +156,7 @@ def modulo_and_constants(self):
         local_variables,
         asserts,
         modulo_and_constants,
+        other_rejections,
     ],
 )
 def test_extraction_and_solver_match_python_exhaustively(validator):

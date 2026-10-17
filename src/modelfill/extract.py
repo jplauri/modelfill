@@ -17,6 +17,8 @@ from collections.abc import Callable, Collection, Mapping
 from enum import Enum
 from typing import Any, Literal
 
+from pydantic_core import PydanticCustomError
+
 from .errors import UnsupportedConstraint
 from .ir import INT, TIME_TYPES, Domain, Expr, Kind, const, encodable, node, plain_enum, var
 
@@ -29,6 +31,10 @@ _CONSTANT_TYPES = (int, bool, str, type(None), *TIME_TYPES.values())
 # A name with no constant value: a parameter, a local or an unknown name. Unlike
 # None, which is a real constant, it is never read as a value.
 _UNRESOLVED = object()
+
+# What a validator may raise to reject: Pydantic turns each into a ValidationError,
+# and a dataclass's __post_init__ rejects with any of them.
+_REJECTIONS = (ValueError, AssertionError, PydanticCustomError)
 
 _OPERATORS = {
     ast.Add: "add",
@@ -278,13 +284,14 @@ class _Analyzer:
         return accepted, active
 
     def check_raise(self, statement: ast.Raise) -> None:
-        exc = statement.exc
-        if statement.cause is not None:
-            raise self.unsupported(statement, "raise-from is unsupported")
-        if isinstance(exc, ast.Call):
-            exc = exc.func  # Arguments run only on this rejecting path; any message is fine.
-        if not isinstance(exc, ast.Name) or self.resolve(exc.id) is not ValueError:
-            raise self.unsupported(statement, "only raising builtin ValueError is supported")
+        # Arguments and a cause run only on this rejecting path; any message is fine.
+        exc = statement.exc.func if isinstance(statement.exc, ast.Call) else statement.exc
+        if not isinstance(exc, ast.Name) or self.resolve(exc.id) not in _REJECTIONS:
+            raise self.unsupported(
+                statement,
+                "only raising builtin ValueError or AssertionError, or PydanticCustomError,"
+                " is supported",
+            )
 
     def truth(self, syntax: ast.expr) -> Expr:
         # A condition needs truth values, whereas Python and/or used as operands
