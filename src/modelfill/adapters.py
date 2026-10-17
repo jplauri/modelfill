@@ -234,6 +234,16 @@ def _resolve(annotation: Any) -> tuple[Any, list[Any]]:
         for item in outer:  # A Field() in Annotated carries its constraints as metadata.
             metadata += item.metadata if isinstance(item, FieldInfo) else [item]
         return inner, metadata
+    arguments = get_args(annotation)
+    if get_origin(annotation) in (Union, types.UnionType) and type(None) in arguments:
+        options = [option for option in arguments if option is not type(None)]
+        if len(options) == 1:
+            inner, metadata = _resolve(options[0])
+            # Pydantic checks these on the value, never on None, as modelfill does an
+            # Optional field's own constraints. But an AfterValidator there never sees
+            # None, unlike one on the field, so that layer stays as it is.
+            if not any(isinstance(item, AfterValidator) for item in _flatten(metadata)):
+                return inner | None, metadata
     return annotation, []
 
 

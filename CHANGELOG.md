@@ -11,6 +11,9 @@
 - Naive `time` fields are solved: rules can compare them, bounds such as
   `Field(ge=time(8))` apply, and the canonical value is nearest midnight. A time
   used to be an external field, so a rule reading one failed even in auto mode.
+- A type wrapped inside `Optional`, such as `Annotated[int, Field(ge=5)] | None` or
+  a `NewType` there, is solved, its constraints holding for non-None values. It
+  was an external field, so rules could not read it.
 - `Annotated[..., AfterValidator(f)]` with a named function is analyzed like
   `@field_validator(mode="after")`: a pure check, which returns the value it was
   given, is modeled, so strict mode accepts it and it can prove a model

@@ -359,6 +359,23 @@ class Member(BaseModel):
     labels: Labels
 
 
+class Optionals(BaseModel):
+    bounded: Annotated[int, Field(ge=5)] | None
+    member: UserId | None
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.bounded is None:
+            raise ValueError("a bound is needed")
+        return self
+
+
+def test_wrapped_types_inside_optional_are_solved():
+    # Each was an opaque external field, so a rule reading one was unsupported.
+    optionals = ModelFiller(Optionals, mode="strict").fill()
+    assert (optionals.bounded, optionals.member) == (5, None)
+
+
 def test_new_types_and_type_aliases_are_read_through():
     # These once had no value at all, solved or boring.
     member = ModelFiller(Member, mode="strict").fill()
