@@ -247,6 +247,16 @@ class ModelFiller[T]:
         self._nested: dict[str, ModelFiller[Any]] = {}  # One filler per nested model field.
         self._outer: tuple[type, ...] = ()  # The models this one is nested in.
 
+    @property
+    def _options(self) -> dict[str, Any]:
+        """What a nested model's filler, or a fresh one, takes from this one."""
+        return {
+            "mode": self.mode,
+            "max_attempts": self.max_attempts,
+            "work_limit": self.work_limit,
+            "timeout_ms": self.timeout_ms,
+        }
+
     def _solver(self) -> Solver:
         if not hasattr(self._local, "solver"):
             self._local.solver = Solver(
@@ -519,14 +529,7 @@ class ModelFiller[T]:
                 for key, provider in self.providers.items()
                 if not isinstance(key, str) or key.startswith(prefix)
             }
-            nested = ModelFiller(
-                model,
-                mode=self.mode,
-                max_attempts=self.max_attempts,
-                work_limit=self.work_limit,
-                timeout_ms=self.timeout_ms,
-                providers=providers,
-            )
+            nested = ModelFiller(model, **self._options, providers=providers)
             nested._outer = (*self._outer, self.model)
             self._nested[name] = nested
         return self._nested[name]
