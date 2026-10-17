@@ -47,14 +47,7 @@ def from_model[T](
     @st.composite
     def instances(draw: Callable[[st.SearchStrategy[Any]], Any]) -> T:
         fixed = {name: draw(strategy) for name, strategy in strategies.items()}
-        filler = ModelFiller(
-            template.model,
-            mode=template.mode,
-            max_attempts=template.max_attempts,
-            work_limit=template.work_limit,
-            timeout_ms=template.timeout_ms,
-            providers=template.providers,
-        )
+        filler = ModelFiller(template.model, **template._options, providers=template.providers)
         rng = random.Random(draw(st.integers(0, 2**32 - 1)))
         try:
             return filler._complete(fixed, 1, rng)[0]

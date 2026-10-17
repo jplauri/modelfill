@@ -262,10 +262,9 @@ def test_batch_members_differ_after_validation():
         filler.batch(2)
 
 
-def test_seed_is_gone_and_explain_names_the_selection():
+def test_seed_is_gone_and_explain_reports_the_work_limit():
     with pytest.raises(TypeError):
         ModelFiller(Meeting, seed=1)
     explanation = ModelFiller(Meeting, work_limit=5000).explain()
-    assert explanation["selection"] == "canonical"
     assert explanation["work_limit_per_check"] == 5000
-    assert "seed" not in explanation
+    assert "seed" not in explanation and "selection" not in explanation

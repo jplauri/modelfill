@@ -80,7 +80,6 @@ def _compile(model: type) -> _Compiled:
 
 
 def _compile_fields(model: type, adapter: Adapter, stack: list[type]) -> _Compiled:
-    domains: dict[str, Domain] = {}
     solved: list[tuple[str, FieldSpec]] = []
     rules = list(adapter.constraints)
     predicates: list[tuple[str, Expr]] = []
@@ -90,7 +89,6 @@ def _compile_fields(model: type, adapter: Adapter, stack: list[type]) -> _Compil
     nested: list[tuple[str, type]] = []
     for field in adapter.fields:
         if field.domain is not None:
-            domains[field.name] = field.domain
             solved.append((field.name, field))
             if field.unchecked_default:
                 unchecked.append(field.name)
@@ -105,13 +103,13 @@ def _compile_fields(model: type, adapter: Adapter, stack: list[type]) -> _Compil
             continue  # Filling reports why this nested model cannot be completed.
         prefix = f"{field.name}."
         nested.append((field.name, inner))
-        domains.update({prefix + name: domain for name, domain in sub.domains.items()})
         solved += [(prefix + name, spec) for name, spec in sub.solved]
         rules += [(_relabel(label, prefix), prefixed(rule, prefix)) for label, rule in sub.rules]
         predicates += [(label, prefixed(rule, prefix)) for label, rule in sub.predicates]
         diagnostics += [(prefix + name, status, detail) for name, status, detail in sub.validators]
         unsupported += [f"{field.name}: {reason}" for reason in sub.unsupported]
         unchecked += [prefix + name for name in sub.unchecked]
+    domains = {name: spec.domain for name, spec in solved if spec.domain is not None}
     for validator in adapter.validators:
         name = validator.name
         if validator.field_name:
@@ -246,6 +244,16 @@ class ModelFiller[T]:
         self._local = threading.local()
         self._nested: dict[str, ModelFiller[Any]] = {}  # One filler per nested model field.
         self._outer: tuple[type, ...] = ()  # The models this one is nested in.
+
+    @property
+    def _options(self) -> dict[str, Any]:
+        """What a nested model's filler, or a fresh one, takes from this one."""
+        return {
+            "mode": self.mode,
+            "max_attempts": self.max_attempts,
+            "work_limit": self.work_limit,
+            "timeout_ms": self.timeout_ms,
+        }
 
     def _solver(self) -> Solver:
         if not hasattr(self._local, "solver"):
@@ -519,14 +527,7 @@ class ModelFiller[T]:
                 for key, provider in self.providers.items()
                 if not isinstance(key, str) or key.startswith(prefix)
             }
-            nested = ModelFiller(
-                model,
-                mode=self.mode,
-                max_attempts=self.max_attempts,
-                work_limit=self.work_limit,
-                timeout_ms=self.timeout_ms,
-                providers=providers,
-            )
+            nested = ModelFiller(model, **self._options, providers=providers)
             nested._outer = (*self._outer, self.model)
             self._nested[name] = nested
         return self._nested[name]
@@ -649,7 +650,6 @@ class ModelFiller[T]:
             "validator_constraints_active": not bool(compiled.unsupported),
             "can_prove_unsat": not compiled.unsupported and not compiled.unchecked,
             "unsat_requires_explicit_fields": list(compiled.unchecked),
-            "selection": "canonical",
             "max_attempts": self.max_attempts,
             "work_limit_per_check": self.work_limit,
             "timeout_ms_per_check": self.timeout_ms,

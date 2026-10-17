@@ -305,8 +305,8 @@ field.
 
 Diagnostics include field domains and patterns, defaults, each validator's
 extraction status, unsupported reasons, whether extracted predicates are active,
-the selection mode and proof eligibility. In a fallback model, successfully
-extracted validators report the status `guidance` rather than `modeled`.
+and proof eligibility. In a fallback model, successfully extracted validators
+report the status `guidance` rather than `modeled`.
 
 ## Canonical values
 

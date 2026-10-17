@@ -331,9 +331,10 @@ class Pattern:
 
     def __contains__(self, value: object) -> bool:
         try:
-            return self.validator.validate_python(value) == value
+            self.validator.validate_python(value)  # The pattern alone never changes a value.
         except ValidationError:
             return False
+        return True
 
     def spell(self, name: str, allowed: Callable[[int], bool], lowest: int) -> Iterator[str]:
         """Matching values in canonical order, at sizes from lowest that allowed accepts.
