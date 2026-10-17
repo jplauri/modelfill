@@ -129,14 +129,17 @@ canonical completion or a fixed boring value, in that order, and they pass to th
 constructor, which validates them as usual; only solved fields must keep their
 exact type. They cannot weaken an UNSAT claim, because no extracted predicate can
 mention them: a validator that reads an external field is unsupported, which
-already rules out UNSAT. Code in an external field's metadata, such as an
-`AfterValidator`, is unsupported too: on a required nested model it could replace
-the object whose fields the parent's rules read, after that model's own rules
-held for the original. Groups are unpacked first, as Pydantic unpacks them, and
-only markers known to constrain, tag or serialize a value stay supported; coming
-from Pydantic is not enough, since `ValidateAs` runs a function it is given. A nested model is completed by its own filler, so a
-contradiction among a nested dict's fields is proven by that filler's solver and
-is a genuine impossibility for the outer model too. When Pydantic rejects a
+already rules out UNSAT. Other code in an external field's metadata, such as
+`ValidateAs`, is unsupported too: on a required nested model it could replace the
+object whose fields the parent's rules read, after that model's own rules held
+for the original. Groups are unpacked first, as Pydantic unpacks them, and only
+markers known to constrain, tag or serialize a value stay supported; coming from
+Pydantic is not enough, since `ValidateAs` runs a function it is given. An
+`AfterValidator`, on any field, gets the field's validated value as an after
+field validator does, so it is analyzed as one: only a pure check, which returns
+the value it was given, is modeled. A nested model is completed by its own
+filler, so a contradiction among a nested dict's fields is proven by that
+filler's solver and is a genuine impossibility for the outer model too. When Pydantic rejects a
 boring or provided value, the search goes on: an error's location says where it
 was reported, not what it depends on, and a validator of that field may read
 solved fields through `info.data`. If the search ends, the error names the field.

@@ -181,7 +181,7 @@ filler.explain()  # fresh JSON-friendly dictionary
 | Numeric metadata | Integer, date, datetime and timedelta `Field(gt, ge, lt, le)`, respecting strict and inclusive bounds; integer `Field(multiple_of)`; on optional fields they constrain non-None values, as in Pydantic |
 | String metadata | `Field(min_length, max_length)` and global `str_min_length` / `str_max_length`; a [`pattern`](#string-patterns), with either regex engine |
 | Model validators | Instance `@model_validator(mode="after")`, returning the original `self` on successful paths |
-| Field validators | `@field_validator(mode="after")`, returning the original value, including literal `info.data["earlier_field"]` reads |
+| Field validators | `@field_validator(mode="after")`, and `Annotated[..., AfterValidator(f)]` with a named function `f`, returning the original value, including literal `info.data["earlier_field"]` reads |
 | Nested models | A required nested model (Pydantic or dataclass) is solved with its parent: rules may read `self.customer.age`, and a dict fixes some of its fields. Optional nested models and those with defaults are completed on their own |
 | Aliases | Simple, distinct string input/validation aliases; API still uses field names |
 | Defaults | Copied values and zero-argument factories as preferences |
@@ -454,10 +454,11 @@ A field with no value from any source, such as one of an arbitrary class, raises
 `FutureDate`, whose validity depends on the clock. If Pydantic keeps rejecting a
 boring value, for example because of a custom validator, the search ends in
 `GenerationExhausted`, which names the field. Validators that read these fields
-remain unsupported logic, as does code in their metadata, such as an
-`AfterValidator` or `ValidateAs`, so a model with either falls back to the bounded
-search; so does a rule that reads an optional nested model or one with a default,
-and any unsupported logic inside a nested model makes the whole object fall back.
+remain unsupported logic, an `AfterValidator` in their metadata included, and so
+does other code there, such as `ValidateAs`. A model with either falls back to the
+bounded search; so does a rule that reads an optional nested model or one with a
+default, and any unsupported logic inside a nested model makes the whole object
+fall back.
 
 ## Exploration with Hypothesis
 
