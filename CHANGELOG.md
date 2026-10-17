@@ -17,6 +17,10 @@
   canonical value is nearest 0 with the field's places, such as `0.50`. Rules may
   test such decimals for equality, with integers too. A Decimal used to be an
   external field, whose boring value often broke its places.
+- Validators may order decimals, against integers too, test their truth and take
+  `min()` or `max()` of them, and a conditional or `and`/`or` value may be a
+  decimal or an integer. Finite `Decimal` constants are read, and so are
+  `Decimal(…)` calls of a string or integer literal, `decimal.Decimal(…)` too.
 - Lists, tuples and dicts of models, and unions of models, are filled instead of
   getting no value: each element is the model's canonical completion, made anew,
   as many as `min_length` asks, and a union gets its first member that fills, so a

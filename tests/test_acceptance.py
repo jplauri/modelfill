@@ -450,6 +450,24 @@ def test_decimal_rules_compare_values_across_grids():
     assert (settled.paid, settled.owed, settled.cash) == (0, 1, False)
 
 
+class Quote(BaseModel):
+    FLOOR: ClassVar[Decimal] = Decimal("9.99")
+    price: Decimal = Field(decimal_places=2)
+    fee: Decimal = Field(decimal_places=1, ge=0)
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.price < self.FLOOR or not self.fee or max(self.price, self.fee) > Decimal(10):
+            raise ValueError("the price is too low, or the fee missing")
+        return self
+
+
+def test_decimal_rules_order_and_test_values():
+    # Ordering decimals was unsupported, and so was a Decimal constant.
+    quote = ModelFiller(Quote, mode="strict").fill()
+    assert (str(quote.price), str(quote.fee)) == ("9.99", "0.1")
+
+
 class Vast(BaseModel):  # The quotients here are past Decimal's 28 digits.
     x: Decimal = Field(decimal_places=1, multiple_of=1, gt=Decimal("1E+27"), lt=10**27 + 1)
 

@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import ast
 import datetime
+import decimal
 import inspect
 import textwrap
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
+from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal
 
@@ -35,10 +37,10 @@ from .ir import (
 )
 
 # Falsy values for truth tests; dates and datetimes are always truthy.
-_ZERO = {"int": 0, "str": "", "timedelta": datetime.timedelta(0)}
+_ZERO = {"int": 0, "str": "", "timedelta": datetime.timedelta(0), "decimal": Decimal(0)}
 
 # Types of named constants (module globals or closures) read into validators.
-_CONSTANT_TYPES = (int, bool, str, type(None), *TIME_TYPES.values())
+_CONSTANT_TYPES = (int, bool, str, type(None), Decimal, *TIME_TYPES.values())
 
 # A name with no constant value: a parameter, a local or an unknown name. Unlike
 # None, which is a real constant, it is never read as a value.
@@ -350,6 +352,8 @@ class _Analyzer:
             raise self.unsupported(syntax, "string constants above U+2FFFF are unsupported")
         if getattr(value, "tzinfo", None) is not None:
             raise self.unsupported(syntax, "aware datetime constants are unsupported")
+        if isinstance(value, Decimal) and not value.is_finite():
+            raise self.unsupported(syntax, "only finite Decimal constants are supported")
         return const(value)
 
     def expression(self, syntax: ast.expr) -> Expr:
@@ -498,6 +502,13 @@ class _Analyzer:
                     return node("len", operand, sort=INT)
             elif any(function is type_ for type_ in TIME_TYPES.values()):
                 return self.time_constant(function, syntax)
+            elif function is Decimal and len(syntax.args) == 1 and not syntax.keywords:
+                argument = self.expression(syntax.args[0])  # Read exactly, as Python does.
+                if argument.op == "const" and type(argument.value) in (int, str):
+                    try:
+                        return self.constant(Decimal(argument.value), syntax)
+                    except decimal.InvalidOperation as exc:
+                        raise self.unsupported(syntax, "invalid Decimal() constant") from exc
             elif function is abs and len(syntax.args) == 1 and not syntax.keywords:
                 value = self.present(self.expression(syntax.args[0]))
                 if value.sort.kind == "int":
@@ -506,16 +517,24 @@ class _Analyzer:
             elif function in (min, max) and len(syntax.args) > 1 and not syntax.keywords:
                 values = [self.present(self.expression(argument)) for argument in syntax.args]
                 kind = values[0].sort.kind
-                if kind in _ORDERED and all(value.sort.kind == kind for value in values):
+                sort = _numbers(values)
+                if sort is None and kind in _ORDERED:
+                    if all(value.sort.kind == kind for value in values):
+                        sort = Domain(kind)
+                if sort is not None:
                     result = values[0]
                     for value in values[1:]:  # The first of equal values wins, as in Python.
                         better = node("lt" if function is min else "gt", value, result)
-                        result = node("ite", better, value, result, sort=Domain(kind))
+                        result = node("ite", better, value, result, sort=sort)
                     return result
         raise self.unsupported(syntax, f"unsupported expression {type(syntax).__name__}")
 
     def choice(self, condition: Expr, yes: Expr, no: Expr, syntax: ast.AST) -> Expr:
-        """yes where condition holds, else no: two values of one supported type."""
+        """yes where condition holds, else no: two values of one supported type, or
+        numbers that include a decimal."""
+        mixed = _numbers((yes, no))
+        if mixed is not None:
+            return node("ite", condition, yes, no, sort=mixed)
         if yes.sort.kind != no.sort.kind or (
             yes.sort.kind == "enum" and self.enum_type(yes) is not self.enum_type(no)
         ):
@@ -524,8 +543,6 @@ class _Analyzer:
             enum_type = self.enum_type(yes)
             assert enum_type is not None
             sort = Domain("enum", tuple(enum_type))
-        elif yes.sort.kind == "decimal":  # On the finer grid of the two.
-            sort = Domain("decimal", scale=max(yes.sort.scale, no.sort.scale))
         else:
             sort = Domain(yes.sort.kind)
         return node("ite", condition, yes, no, sort=sort)
@@ -579,15 +596,14 @@ class _Analyzer:
         return (_not(test) if isinstance(operation, ast.NotIn) else test), left
 
     def callee(self, function: ast.expr) -> Any:
-        """A call's target: a resolved name, or an attribute of the datetime module."""
+        """A call's target: a resolved name, or an attribute of the datetime or decimal
+        module."""
         if isinstance(function, ast.Name):
             return self.resolve(function.id)
-        if (
-            isinstance(function, ast.Attribute)
-            and isinstance(function.value, ast.Name)
-            and self.resolve(function.value.id) is datetime
-        ):
-            return getattr(datetime, function.attr, None)
+        if isinstance(function, ast.Attribute) and isinstance(function.value, ast.Name):
+            module = self.resolve(function.value.id)
+            if module is datetime or module is decimal:
+                return getattr(module, function.attr, None)
         return None
 
     def time_constant(self, constructor: type, syntax: ast.Call) -> Expr:
@@ -637,14 +653,14 @@ class _Analyzer:
         # Ordering raises TypeError for None, so it requires values.
         left, right = self.present(left), self.present(right)
         kinds = {left.sort.kind, right.sort.kind}
-        if not kinds <= {"int", "bool"} and kinds not in (
+        if not kinds <= {"int", "bool", "decimal"} and kinds not in (
             {"date"},
             {"datetime"},
             {"time"},
             {"timedelta"},
         ):
             raise self.unsupported(
-                syntax, "ordering needs integers/Booleans or two values of one date/time type"
+                syntax, "ordering needs numbers or two values of one date/time type"
             )
         return node(opname, left, right)
 
@@ -673,6 +689,15 @@ class _Analyzer:
         if value.sort.kind == "enum" and value.sort.choices:
             return type(value.sort.choices[0])
         return None
+
+
+def _numbers(values: Sequence[Expr]) -> Domain | None:
+    """The sort of a value that is one of these, when they are decimals and integers:
+    Python compares them by value, on the finest grid among them."""
+    kinds = {value.sort.kind for value in values}
+    if "decimal" in kinds and kinds <= {"int", "decimal"}:
+        return Domain("decimal", scale=max(value.sort.scale for value in values))
+    return None
 
 
 def extract_validator(
