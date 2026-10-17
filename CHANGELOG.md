@@ -8,6 +8,9 @@
 
 ### Added
 
+- Naive `time` fields are solved: rules can compare them, bounds such as
+  `Field(ge=time(8))` apply, and the canonical value is nearest midnight. A time
+  used to be an external field, so a rule reading one failed even in auto mode.
 - `Annotated[..., AfterValidator(f)]` with a named function is analyzed like
   `@field_validator(mode="after")`: a pure check, which returns the value it was
   given, is modeled, so strict mode accepts it and it can prove a model

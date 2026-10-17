@@ -307,7 +307,7 @@ class _Analyzer:
             truth = value
         elif kind in _ZERO:
             truth = node("ne", value, const(_ZERO[kind]))
-        elif kind in ("date", "datetime"):
+        elif kind in ("date", "datetime", "time"):  # Midnight is truthy too.
             truth = const(True)
         elif kind == "enum" and value.sort.choices:
             truth = _or(
@@ -549,7 +549,12 @@ class _Analyzer:
         # Ordering raises TypeError for None, so it requires values.
         left, right = self.present(left), self.present(right)
         kinds = {left.sort.kind, right.sort.kind}
-        if not kinds <= {"int", "bool"} and kinds not in ({"date"}, {"datetime"}, {"timedelta"}):
+        if not kinds <= {"int", "bool"} and kinds not in (
+            {"date"},
+            {"datetime"},
+            {"time"},
+            {"timedelta"},
+        ):
             raise self.unsupported(
                 syntax, "ordering needs integers/Booleans or two values of one date/time type"
             )

@@ -28,6 +28,7 @@ _INTEGERS = {
     "int": (0, 1, 100),
     "date": (encode(date(2025, 1, 1)), 1, 365),
     "datetime": (encode(datetime(2025, 1, 1)), 60_000_000, 525_600),
+    "time": (0, 60_000_000, 1_440),  # Midnight, by the minute over a day.
     "timedelta": (0, 60_000_000, 10_080),
 }
 

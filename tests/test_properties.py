@@ -7,7 +7,7 @@ and randomness come from the Hypothesis profiles in conftest.py.
 import itertools
 import linecache
 import random
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace
 from typing import Annotated
 
@@ -35,12 +35,13 @@ TEXT = st.text(
     st.one_of(
         st.tuples(st.dates(), st.dates()),
         st.tuples(st.datetimes(), st.datetimes()),
+        st.tuples(st.times(), st.times()),
         st.tuples(st.timedeltas(), st.timedeltas()),
     )
 )
 def test_time_encodings_round_trip_and_keep_order(pair):
     first, second = pair
-    kind = {date: "date", datetime: "datetime", timedelta: "timedelta"}[type(first)]
+    kind = {date: "date", datetime: "datetime", time: "time", timedelta: "timedelta"}[type(first)]
     assert decode(kind, encode(first)) == first
     assert (encode(first) < encode(second)) == (first < second)
 

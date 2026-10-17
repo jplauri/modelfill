@@ -3,7 +3,7 @@
 import random
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from enum import Enum
 from itertools import product
 from typing import Annotated, ClassVar, Literal, NewType, get_args
@@ -364,6 +364,25 @@ def test_new_types_and_type_aliases_are_read_through():
     member = ModelFiller(Member, mode="strict").fill()
     assert (member.id, member.small, member.age, member.labels) == (0, 3, 18, [])
     assert member.token == UUID("00000000-0000-4000-8000-000000000000")
+
+
+class Opening(BaseModel):
+    opens: time = Field(ge=time(8))
+    closes: time
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.closes <= self.opens:
+            raise ValueError("it must close after it opens")
+        return self
+
+
+def test_times_are_solved():
+    # A time was an external field, so this rule was unsupported and auto mode failed.
+    filler = ModelFiller(Opening, mode="strict")
+    assert (filler.fill().opens, filler.fill().closes) == (time(8), time(8, 0, 0, 1))
+    with pytest.raises(UnsatisfiableConstraints):  # Nothing comes after the last instant.
+        filler.fill(opens=time(23, 59, 59, 999999))
 
 
 def test_field_validator_earlier_field_reads():
