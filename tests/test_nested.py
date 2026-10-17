@@ -241,9 +241,24 @@ def flipped(flip):
 def test_code_in_a_nested_model_field_metadata_is_unsupported(flip):
     # Solving count >= 0 and count < 0 together once claimed a contradiction.
     model = flipped(flip)
-    with pytest.raises(UnsupportedConstraint, match="unsupported metadata"):
+    # An AfterValidator is analyzed as a field validator, and this one returns a copy.
+    with pytest.raises(UnsupportedConstraint, match="return must preserve|unsupported metadata"):
         ModelFiller(model, mode="strict")
     assert fill(model).counter.count == -1
+
+
+def positive_count(counter):
+    if counter.count <= 0:
+        raise ValueError("the count must be positive")
+    return counter
+
+
+class Checked(BaseModel):
+    counter: Annotated[Counter, AfterValidator(positive_count)]
+
+
+def test_a_pure_check_on_a_nested_model_field_is_modeled():
+    assert ModelFiller(Checked, mode="strict").fill().counter.count == 1
 
 
 class Leaf(BaseModel):

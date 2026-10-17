@@ -223,12 +223,17 @@ def test_infinite_bounds_leave_zero():
     assert ModelFiller(Unbounded).explain()["fields"]["low"]["default"] == "boring value"
 
 
+def in_order(tags):
+    return sorted(tags)
+
+
 class Sorted(BaseModel):
-    tags: Annotated[list[str], AfterValidator(lambda tags: sorted(tags))]
+    tags: Annotated[list[str], AfterValidator(in_order)]
 
 
 def test_code_in_an_external_field_metadata_is_unsupported():
-    with pytest.raises(UnsupportedConstraint, match="'tags': unsupported metadata AfterValidator"):
+    # Analyzed as a field validator, it reads a field the solver does not model.
+    with pytest.raises(UnsupportedConstraint, match="in_order.*no known target field"):
         ModelFiller(Sorted, mode="strict")
     assert fill(Sorted).tags == []
 

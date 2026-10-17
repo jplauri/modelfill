@@ -29,6 +29,7 @@ from annotated_types import (
     Predicate,
 )
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Discriminator,
@@ -365,7 +366,8 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
             if parent is not BaseModel:
                 unsupported.append("Custom Pydantic core schema is unsupported")
             break
-    validators = _pydantic_validators(model, tuple(model.model_fields), unsupported)
+    names = tuple(model.model_fields)
+    validators = list(_pydantic_validators(model, names, unsupported))
     # A field validator could reject a default that the field's constraints accept.
     validated = {validator.field_name for validator in validators if validator.field_name}
     # Validation aliases do not apply when validate_by_alias=False.
@@ -374,7 +376,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         if "validate_by_alias" in ConfigDict.__annotations__
         else True
     )
-    for name, info in model.model_fields.items():
+    for index, (name, info) in enumerate(model.model_fields.items()):
         domain = _domain(info.annotation)
         alias = info.validation_alias
         if alias is not None and not isinstance(alias, str):
@@ -397,10 +399,28 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         # Unpacked before anything reads it, so a group's own length limits override
         # the global ones, as in Pydantic.
         metadata = _flatten(info.metadata)
+        # An AfterValidator gets the field's validated value, as a field validator does,
+        # so it is analyzed as one: a pure check is modeled, anything else unsupported.
+        # Unlike a constraint of one kind, every one of them runs.
+        checks = [item.func for item in metadata if isinstance(item, AfterValidator)]
+        metadata = [item for item in metadata if not isinstance(item, AfterValidator)]
+        validators += [
+            ValidatorSpec(
+                getattr(check, "__name__", repr(check)),
+                check,
+                "field",
+                "after",
+                name,
+                names[:index],
+            )
+            for check in checks
+        ]
+        if checks:
+            validated.add(name)
         if domain is None:
-            # Pydantic validates an external field itself, but code in its metadata could
-            # replace a value that a rule reads, a required nested model's say, so it is
-            # unsupported logic, as a field validator of the field would be.
+            # Pydantic validates an external field itself, but other code in its metadata
+            # could replace a value that a rule reads, a required nested model's say, so it
+            # is unsupported logic, as a transforming field validator of the field would be.
             unsupported += [
                 f"Field {name!r}: unsupported metadata {item!r}"
                 for item in metadata
@@ -446,7 +466,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
     inputs = [field.keyword for field in fields]
     if len(set(inputs)) != len(inputs):
         raise UnsupportedConstraint("Multiple fields share the same validation alias")
-    return Adapter(model, tuple(fields), tuple(constraints), validators, tuple(unsupported))
+    return Adapter(model, tuple(fields), tuple(constraints), tuple(validators), tuple(unsupported))
 
 
 def _dataclass(model: type[DataclassInstance]) -> Adapter:

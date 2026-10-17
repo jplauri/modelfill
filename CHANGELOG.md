@@ -8,6 +8,12 @@
 
 ### Added
 
+- `Annotated[..., AfterValidator(f)]` with a named function is analyzed like
+  `@field_validator(mode="after")`: a pure check, which returns the value it was
+  given, is modeled, so strict mode accepts it and it can prove a model
+  impossible. A reusable checked type such as
+  `PackSize = Annotated[int, AfterValidator(multiple_of_four)]` now fills without
+  the bounded search. Other annotated callbacks remain unsupported logic.
 - String patterns: a `pattern` in `Field`, `constr` or `StringConstraints` no
   longer makes a model fall back. Pydantic's own validation decides what matches,
   under either regex engine, and canonical values are spelled from the pattern,

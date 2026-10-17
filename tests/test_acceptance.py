@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 import pytest
 from annotated_types import Ge, Gt, Le, Lt, MaxLen, MinLen, MultipleOf
 from pydantic import (
+    AfterValidator,
     BaseModel,
     Field,
     ValidationError,
@@ -349,6 +350,59 @@ def test_field_validator_earlier_field_reads():
     assert filler.fill(upper=2).lower == 1
     with pytest.raises(UnsatisfiableConstraints):
         filler.fill(lower=20)
+
+
+def multiple_of_four(value: int) -> int:
+    if value <= 0 or value % 4 != 0:
+        raise ValueError("a pack holds a positive multiple of four")
+    return value
+
+
+PackSize = Annotated[int, AfterValidator(multiple_of_four)]  # A reusable checked type.
+
+
+class Package(BaseModel):
+    units: PackSize
+
+
+class SmallPackage(BaseModel):
+    units: PackSize = Field(le=3)
+
+
+class DefaultPackage(BaseModel):
+    units: PackSize = 0  # An unchecked default the check would reject.
+
+
+def above_minimum(value: int, info: ValidationInfo) -> int:
+    if value <= info.data["minimum"]:
+        raise ValueError("the value must exceed the minimum")
+    return value
+
+
+class AboveMinimum(BaseModel):
+    minimum: int = Field(ge=0, le=10)
+    value: Annotated[int, AfterValidator(above_minimum)]
+
+
+def doubled(value: int) -> int:
+    return value * 2
+
+
+class Doubled(BaseModel):
+    value: Annotated[int, AfterValidator(doubled)]
+
+
+def test_pure_annotated_after_validators_are_modeled_like_field_validators():
+    package = ModelFiller(Package, mode="strict")
+    assert package.fill().units == 4
+    (check,) = package.explain()["validators"]
+    assert (check["name"], check["status"]) == ("multiple_of_four[units]", "modeled")
+    with pytest.raises(UnsatisfiableConstraints):  # No positive multiple of four up to 3.
+        ModelFiller(SmallPackage, mode="strict").fill()
+    assert ModelFiller(DefaultPackage).explain()["unsat_requires_explicit_fields"] == ["units"]
+    assert ModelFiller(AboveMinimum, mode="strict").fill(minimum=5).value == 6
+    with pytest.raises(UnsupportedConstraint, match="return must preserve"):  # It transforms.
+        ModelFiller(Doubled, mode="strict")
 
 
 def test_shared_filler_thread_safety():
