@@ -8,7 +8,7 @@ import math
 import types
 import uuid
 from collections import abc
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -33,8 +33,10 @@ from pydantic import (
 from pydantic.types import UuidVersion
 
 from .adapters import _flatten, _resolve
+from .errors import ModelFillError
 
 MISSING = dataclasses.MISSING
+Fill = Callable[[type, dict[str, Any]], Any]  # Completes a model from some fields.
 _START = datetime(2025, 1, 1)  # The anchor that canonical dates and times use, too.
 _SCALARS: dict[Any, Any] = {
     type(None): None,
@@ -81,39 +83,56 @@ def nested_model(annotation: Any) -> type | None:
     return None
 
 
-def boring(annotation: Any, metadata: Sequence[Any] = ()) -> Any:
-    """A fixed, readable value of a type the solver does not model, or MISSING."""
+def models_in(annotation: Any) -> list[type]:
+    """The models a value of this type can hold, at any depth: itself, a collection's
+    elements or values, a union's members."""
+    annotation = _resolve(annotation)[0]
+    if nested_model(annotation) is annotation:
+        return [annotation]
+    return [model for arg in get_args(annotation) for model in models_in(arg)]
+
+
+def boring(annotation: Any, metadata: Sequence[Any] = (), fill: Fill | None = None) -> Any:
+    """A fixed, readable value of a type the solver does not model, or MISSING.
+
+    A model has no boring value, but with fill one gets fill(model, {}): in its own
+    place, as each of a collection's elements, or as a union's first member to fill
+    when no member is boring.
+    """
     annotation, inherited = _resolve(annotation)  # NewType, type alias and Annotated layers.
     metadata = (*inherited, *metadata)
     origin, args = get_origin(annotation), get_args(annotation)
     if annotation in (Any, object):
         return None
+    if fill is not None and nested_model(annotation) is annotation:
+        return fill(annotation, {})
     if origin in (Union, types.UnionType):
         if type(None) in args:
             return None
-        return next((value for value in map(boring, args) if value is not MISSING), MISSING)
+        value = next((value for value in map(boring, args) if value is not MISSING), MISSING)
+        return value if value is not MISSING or fill is None else _first(args, fill)
     if origin is Literal:
         return args[0]
     limits = {type(item): item for item in _flatten(metadata)}  # The last of each kind wins.
     size = limits[MinLen].min_length if MinLen in limits else 0
     kind = origin or annotation
     if kind is tuple and args and args[-1] is not Ellipsis:  # A fixed shape: one per position.
-        values = [boring(arg) for arg in args]
+        values = [boring(arg, fill=fill) for arg in args]
         return MISSING if any(value is MISSING for value in values) else tuple(values)
-    if kind in _LISTS or kind is tuple:  # Empty, or min_length copies of the element's value.
-        element = boring(args[0]) if args else None
-        if size and element is MISSING:
+    if kind in _LISTS or kind is tuple:  # Empty, or min_length elements, each made anew.
+        elements = [boring(args[0], fill=fill) if args else None for _ in range(size)]
+        if any(element is MISSING for element in elements):
             return MISSING
-        return (tuple if kind is tuple else list)([element] * size)
+        return (tuple if kind is tuple else list)(elements)
     if kind in _SETS:
         elements = _distinct(args[0] if args else Any, size)
         return MISSING if elements is None else (frozenset if kind is frozenset else set)(elements)
     if kind in _MAPPINGS:  # Distinct keys, each with the value type's boring value.
         keys = _distinct(args[0] if args else Any, size)
-        value = boring(args[1]) if len(args) == 2 else None
-        return (
-            MISSING if keys is None or (keys and value is MISSING) else dict.fromkeys(keys, value)
-        )
+        if keys is None:
+            return MISSING
+        values = {key: boring(args[1], fill=fill) if len(args) == 2 else None for key in keys}
+        return MISSING if any(value is MISSING for value in values.values()) else values
     if kind is str:
         return "_" * size
     if kind is bytes:
@@ -132,6 +151,22 @@ def boring(annotation: Any, metadata: Sequence[Any] = ()) -> Any:
         return kind("https://example.com/")
     if inspect.isclass(kind) and issubclass(kind, Enum):
         return next(iter(kind), MISSING)
+    return MISSING
+
+
+def _first(options: Sequence[Any], fill: Fill) -> Any:
+    """The first union member that fill can make, in declaration order, or MISSING."""
+    failure = None
+    for option in options:
+        try:
+            value = boring(option, fill=fill)
+        except ModelFillError as error:  # This member cannot be filled; the next may.
+            failure = failure or error
+            continue
+        if value is not MISSING:
+            return value
+    if failure is not None:
+        raise failure
     return MISSING
 
 

@@ -14,7 +14,7 @@ from pydantic import BaseModel, ValidationError
 
 from .adapters import MISSING, Adapter, FieldSpec, _domain, _resolve, introspect
 from .backend import Solver
-from .boring import boring, nested_model
+from .boring import boring, models_in, nested_model
 from .errors import (
     GenerationExhausted,
     ModelFillError,
@@ -520,9 +520,8 @@ class ModelFiller[T]:
         """The filler of a nested model field, with this filler's options and providers."""
         if (name, model) not in self._nested:
             if model in (*self._outer, self.model):
-                raise UnsupportedConstraint(
-                    f"{name}: {model.__name__} contains itself; pass a value"
-                )
+                # Callers name the field.
+                raise UnsupportedConstraint(f"{model.__name__} contains itself; pass a value")
             prefix = f"{name}."
             providers = {
                 key.removeprefix(prefix) if isinstance(key, str) else key: provider
@@ -593,10 +592,17 @@ class ModelFiller[T]:
                 make = partial(self._fill_nested, name, nested, {})
             elif boring(field.annotation, field.metadata) is not MISSING:
                 make = partial(boring, field.annotation, field.metadata)
+            elif models_in(field.annotation):  # Collections and unions of models.
+                fill = partial(self._fill_nested, name)
+                make = partial(boring, field.annotation, field.metadata, fill)
             else:
                 missing.append(name)
                 continue
-            inputs[name], fresh[name] = make(), make
+            value = make()
+            if value is MISSING:  # Models in a shape with no boring value, such as a set.
+                missing.append(name)
+                continue
+            inputs[name], fresh[name] = value, make
             chosen.add(field.keyword)
         if missing:
             raise UnsupportedConstraint(
@@ -615,6 +621,8 @@ class ModelFiller[T]:
                 source = "nested model"
             elif boring(field.annotation, field.metadata) is not MISSING:
                 source = "boring value"
+            elif models_in(field.annotation):
+                source = "nested models"
             else:
                 source = "required input"
             return {"type": "external", "choices": None, "default": source}

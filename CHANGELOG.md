@@ -8,6 +8,10 @@
 
 ### Added
 
+- Lists, tuples and dicts of models, and unions of models, are filled instead of
+  getting no value: each element is the model's canonical completion, made anew,
+  as many as `min_length` asks, and a union gets its first member that fills, so a
+  tagged union gets its first branch.
 - Naive `time` fields are solved: rules can compare them, bounds such as
   `Field(ge=time(8))` apply, and the canonical value is nearest midnight. A time
   used to be an external field, so a rule reading one failed even in auto mode.
