@@ -30,6 +30,9 @@
   wrap, with the constraints they carry, as Pydantic reads them: a
   `NewType("UserId", int)` field is solved, and `type Adult = Annotated[int,
   Ge(18)]` gives 18. Such fields used to get no value at all.
+- `AliasChoices` and `AliasPath` validation aliases work instead of failing even
+  in auto mode: a path of keys builds nested dicts, the first such choice is used,
+  and a path through a list falls back to the field name when Pydantic accepts it.
 - When the search runs out of readable strings, the error keeps its usual details,
   such as the unsupported logic and the last rejection.
 - A validator that reads a parameter such as `self`, `info` or `cls` as a bare

@@ -6,6 +6,7 @@ from typing import Annotated, ClassVar, Literal, Optional
 import pytest
 from pydantic import (
     AliasChoices,
+    AliasPath,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -162,12 +163,28 @@ def test_alias_configuration_across_pydantic_versions():
     assert introspect(Aliased).construct({"count": 4}).count == 4
 
 
-def test_complex_aliases_rejected():
+def test_alias_choices_and_paths():
+    # These once failed even in auto mode.
     class Aliased(BaseModel):
-        count: int = Field(validation_alias=AliasChoices("Count", "count"))
+        count: int = Field(validation_alias=AliasChoices(AliasPath("items", 0), "Count"))
+        inner: int = Field(validation_alias=AliasPath("outer", "inner"))
+        other: int = Field(validation_alias=AliasPath("outer", "other"))  # The same dict.
 
-    with pytest.raises(UnsupportedConstraint, match="complex validation aliases"):
-        introspect(Aliased)
+    adapter = introspect(Aliased)
+    built = adapter.construct({"count": 1, "inner": 2, "other": 3})
+    assert (built.count, built.inner, built.other) == (1, 2, 3)
+
+    class ByName(BaseModel):
+        model_config = ConfigDict(populate_by_name=True)
+        first: int = Field(validation_alias=AliasPath("items", 0))
+
+    assert introspect(ByName).construct({"first": 4}).first == 4  # Pydantic takes the name.
+
+    class Indexed(BaseModel):
+        first: int = Field(validation_alias=AliasPath("items", 0))
+
+    with pytest.raises(UnsupportedConstraint, match="through a list"):
+        introspect(Indexed)
 
 
 def test_duplicate_aliases_rejected():

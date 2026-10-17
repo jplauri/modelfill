@@ -183,7 +183,7 @@ filler.explain()  # fresh JSON-friendly dictionary
 | Model validators | Instance `@model_validator(mode="after")`, returning the original `self` on successful paths |
 | Field validators | `@field_validator(mode="after")`, and `Annotated[..., AfterValidator(f)]` with a named function `f`, returning the original value, including literal `info.data["earlier_field"]` reads |
 | Nested models | A required nested model (Pydantic or dataclass) is solved with its parent: rules may read `self.customer.age`, and a dict fixes some of its fields. Optional nested models and those with defaults are completed on their own |
-| Aliases | Simple, distinct string input/validation aliases; API still uses field names |
+| Aliases | Distinct string input/validation aliases, `AliasPath`s of keys into nested dicts, and `AliasChoices`, of which the first such choice is used, else the field name if Pydantic accepts it; API still uses field names |
 | Defaults | Copied values and zero-argument factories as preferences |
 | Fixed fields | Any subset, solved simultaneously; no left-to-right dependency order required |
 

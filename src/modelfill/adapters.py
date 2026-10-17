@@ -41,6 +41,7 @@ from annotated_types import (
 )
 from pydantic import (
     AfterValidator,
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Discriminator,
@@ -88,7 +89,7 @@ class FieldSpec:
     domain: Domain | None  # None: an external field, supplied by the caller or its default.
     default: Any
     default_factory: Callable[..., Any] | None = None  # Never data-dependent here.
-    input_name: str | None = None
+    input_path: tuple[str, ...] = ()  # Where the constructor reads it, if not by name.
     unchecked_default: bool = False
     required: bool = True
     annotation: Any = None
@@ -96,9 +97,14 @@ class FieldSpec:
     pattern: Pattern | None = None  # A string field's pattern, checked outside the solver.
 
     @property
+    def path(self) -> tuple[str, ...]:
+        """Its name, its validation alias, even an empty one, or an AliasPath's keys."""
+        return self.input_path or (self.name,)
+
+    @property
     def keyword(self) -> str:
-        """The constructor's keyword: the validation alias, even an empty one, else the name."""
-        return self.name if self.input_name is None else self.input_name
+        """The constructor's keyword for the field."""
+        return self.path[0]
 
     def preferred(self) -> Any:
         """Evaluate an ordinary default once per fill; it is a preference."""
@@ -127,9 +133,14 @@ class Adapter:
 
     def construct(self, values: dict[str, Any]) -> Any:
         """Run the model's real constructor, including its original validators."""
-        inputs = {
-            field.keyword: values[field.name] for field in self.fields if field.name in values
-        }
+        inputs: dict[str, Any] = {}
+        for field in self.fields:
+            if field.name in values:
+                *outer, last = field.path
+                target = inputs
+                for key in outer:  # An AliasPath reads the value from nested dicts.
+                    target = target.setdefault(key, {})
+                target[last] = values[field.name]
         return self.model(**inputs)
 
     @property
@@ -224,6 +235,20 @@ def _resolve(annotation: Any) -> tuple[Any, list[Any]]:
             metadata += item.metadata if isinstance(item, FieldInfo) else [item]
         return inner, metadata
     return annotation, []
+
+
+def _input_path(name: str, alias: Any, by_alias: bool, by_name: bool) -> tuple[str, ...]:
+    """Where the constructor reads a field: its name, its alias, or an AliasPath's keys
+    into nested dicts; of AliasChoices, the first choice that is one of these."""
+    if alias is None or not by_alias:
+        return (name,)
+    for choice in alias.choices if isinstance(alias, AliasChoices) else [alias]:
+        path = (choice,) if isinstance(choice, str) else tuple(choice.path)
+        if all(isinstance(key, str) for key in path):
+            return path
+    if by_name:  # Pydantic takes the field's name as well.
+        return (name,)
+    raise UnsupportedConstraint(f"Field {name!r}: an alias path through a list is unsupported")
 
 
 def _pattern(item: Any) -> Any:
@@ -404,15 +429,11 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         if "validate_by_alias" in ConfigDict.__annotations__
         else True
     )
+    by_name = bool(config.get("validate_by_name") or config.get("populate_by_name"))
     for index, (name, info) in enumerate(model.model_fields.items()):
         annotation, inherited = _resolve(info.annotation)
         domain = _domain(annotation)
-        alias = info.validation_alias
-        if alias is not None and not isinstance(alias, str):
-            raise UnsupportedConstraint(
-                f"Field {name!r}: complex validation aliases are unsupported"
-            )
-        input_name = alias if by_alias else name
+        input_path = _input_path(name, info.validation_alias, by_alias, by_name)
         factory = info.default_factory
         if info.default_factory_takes_validated_data:  # None without a factory.
             unsupported.append(f"Field {name!r}: data-dependent default factory is unsupported")
@@ -484,7 +505,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
                 domain,
                 default,
                 factory,
-                input_name,
+                input_path,
                 unchecked,
                 info.is_required(),
                 info.annotation,
@@ -492,8 +513,10 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
                 pattern,
             )
         )
-    inputs = [field.keyword for field in fields]
-    if len(set(inputs)) != len(inputs):
+    paths = [field.path for field in fields]  # Fields may share a dict, not a key in it.
+    if len(set(paths)) < len(paths) or any(
+        a != b and a[: len(b)] == b for a in paths for b in paths
+    ):
         raise UnsupportedConstraint("Multiple fields share the same validation alias")
     return Adapter(model, tuple(fields), tuple(constraints), tuple(validators), tuple(unsupported))
 
