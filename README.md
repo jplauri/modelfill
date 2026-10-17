@@ -230,7 +230,7 @@ the rules and a pattern cannot both hold, though, the result is
 | Boolean operations | `and`, `or`, `not`, with Python truthiness and short circuit meaning; operand-valued `and`/`or` when operands have the same supported type and cannot be `None` (`x or default` excepted); conditional expressions `a if c else b` on the same terms, where only the branch taken runs |
 | Membership | `in` / `not in` a literal tuple, list or set of supported constants or Enum members, outside comparison chains |
 | Strings | Equality, inequality, truthiness, membership in finite literal collections, builtin `len(field)` |
-| Enums | Equality/inequality within the same Enum type, finite membership, exact member truthiness |
+| Enums | Equality/inequality within the same Enum type, finite membership, exact member truthiness; a member's `.value` and `.name`, when its type's values share one supported type |
 
 Early returns and nested branches are analyzed as paths. Rejection conditions
 are not blindly negated. The entire relevant validator must be understood;

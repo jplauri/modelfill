@@ -28,6 +28,8 @@
   integers or values of one date/time type.
 - Validators may read the class's `ClassVar` constants through `self` or `cls`,
   as in `self.n < self.LIMIT`.
+- Validators may read an Enum member's `.value` or `.name`, when its type's values
+  share one supported type.
 - String patterns: a `pattern` in `Field`, `constr` or `StringConstraints` no
   longer makes a model fall back. Pydantic's own validation decides what matches,
   under either regex engine, and canonical values are spelled from the pattern,

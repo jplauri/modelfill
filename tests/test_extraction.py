@@ -245,6 +245,12 @@ class Number(IntEnum):
     ONE = 1
 
 
+def enum_attributes(self):
+    if self.a.value == "blue" and self.b.name != "ZERO" or Color.RED.value == self.a.name:
+        raise ValueError("invalid")
+    return self
+
+
 def enum_validation(self):
     if self.a not in (Color.RED, Color.BLUE):
         raise ValueError("invalid")
@@ -322,6 +328,7 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
         (none_validation, {"a": INT, "b": INT}, {"a": range(2), "b": range(2)}),
         (always_reject, {}, {}),
         (unreachable_code, {}, {}),
+        (enum_attributes, {"a": COLORS, "b": NUMBERS}, {"a": Color, "b": Number}),
     ],
 )
 def test_typed_fields_match_python_exhaustively(validator, fields, grid):

@@ -20,7 +20,19 @@ from typing import Any, Literal
 from pydantic_core import PydanticCustomError
 
 from .errors import UnsupportedConstraint
-from .ir import INT, TIME_TYPES, Domain, Expr, Kind, const, encodable, node, plain_enum, var
+from .ir import (
+    INT,
+    PRIMITIVES,
+    TIME_TYPES,
+    Domain,
+    Expr,
+    Kind,
+    const,
+    encodable,
+    node,
+    plain_enum,
+    var,
+)
 
 # Falsy values for truth tests; dates and datetimes are always truthy.
 _ZERO = {"int": 0, "str": "", "timedelta": datetime.timedelta(0)}
@@ -378,6 +390,13 @@ class _Analyzer:
                         )
                     if syntax.attr in enum_type.__members__:
                         return const(enum_type.__members__[syntax.attr])
+            if syntax.attr in ("value", "name"):  # Of an Enum field or member.
+                try:
+                    member = self.expression(syntax.value)
+                except UnsupportedConstraint:
+                    member = None
+                if member is not None and member.sort.kind == "enum" and member.sort.choices:
+                    return self.member_attribute(member, syntax.attr, syntax)
             raise self.unsupported(
                 syntax, "only model fields and literal Enum members are supported attributes"
             )
@@ -505,6 +524,23 @@ class _Analyzer:
         else:
             sort = Domain(yes.sort.kind)
         return node("ite", condition, yes, no, sort=sort)
+
+    def member_attribute(self, member: Expr, attribute: str, syntax: ast.AST) -> Expr:
+        """An Enum member's value or name, chosen among the members it can be."""
+        choices = member.sort.choices or ()
+        items = [getattr(choice, attribute) for choice in choices]
+        sort = PRIMITIVES.get(type(items[0]))
+        if sort is None or any(type(item) is not type(items[0]) for item in items):
+            raise self.unsupported(syntax, f"Enum {attribute}s must share one supported type")
+        if not all(encodable(item) for item in items):
+            raise self.unsupported(syntax, "string constants above U+2FFFF are unsupported")
+        if member.op == "const":
+            return const(getattr(member.value, attribute))
+        member = self.present(member)  # None has neither: Python raises AttributeError.
+        result = const(items[-1])
+        for choice, item in zip(choices[-2::-1], items[-2::-1], strict=True):
+            result = node("ite", node("eq", member, const(choice)), const(item), result, sort=sort)
+        return result
 
     def field_path(self, syntax: ast.expr) -> str:
         """The field an attribute chain reads: self.customer.age reads "customer.age"."""
