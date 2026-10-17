@@ -100,6 +100,20 @@ def test_past_and_future_dates_get_fixed_values():
     )
 
 
+class Sized(BaseModel):
+    tags: set[str] = Field(min_length=2)
+    codes: frozenset[int] = Field(min_length=3)
+    flags: set[bool] = Field(min_length=2)
+    scores: dict[str, int] = Field(min_length=1)
+
+
+def test_sets_and_dicts_get_distinct_boring_entries():
+    # Distinct elements or keys once had no boring value beyond one.
+    sized = fill(Sized)
+    assert (sized.tags, sized.codes, sized.flags) == ({"", "1"}, {0, 1, 2}, {False, True})
+    assert sized.scores == {"": 0}
+
+
 def test_boring_values_per_type():
     assert fill(Everything).model_dump() == {
         "id1": UUID("00000000-0000-1000-8000-000000000000"),

@@ -105,13 +105,15 @@ def boring(annotation: Any, metadata: Sequence[Any] = ()) -> Any:
         if size and element is MISSING:
             return MISSING
         return (tuple if kind is tuple else list)([element] * size)
-    if kind in _SETS:  # Distinct elements have no boring value beyond one.
-        element = boring(args[0]) if args else None
-        if size > 1 or (size and element is MISSING):
-            return MISSING
-        return (frozenset if kind is frozenset else set)([element] * size)
-    if kind in _MAPPINGS:
-        return MISSING if size else {}
+    if kind in _SETS:
+        elements = _distinct(args[0] if args else Any, size)
+        return MISSING if elements is None else (frozenset if kind is frozenset else set)(elements)
+    if kind in _MAPPINGS:  # Distinct keys, each with the value type's boring value.
+        keys = _distinct(args[0] if args else Any, size)
+        value = boring(args[1]) if len(args) == 2 else None
+        return (
+            MISSING if keys is None or (keys and value is MISSING) else dict.fromkeys(keys, value)
+        )
     if kind is str:
         return "_" * size
     if kind is bytes:
@@ -131,6 +133,29 @@ def boring(annotation: Any, metadata: Sequence[Any] = ()) -> Any:
     if inspect.isclass(kind) and issubclass(kind, Enum):
         return next(iter(kind), MISSING)
     return MISSING
+
+
+def _distinct(annotation: Any, count: int) -> list[Any] | None:
+    """count distinct boring values of a type, or None: its boring value, then the next."""
+    first = boring(annotation)
+    annotation = _resolve(annotation)[0]
+    if not count:
+        return []
+    if get_origin(annotation) is Literal:
+        options = list(get_args(annotation))
+    elif inspect.isclass(annotation) and issubclass(annotation, Enum):
+        options = list(annotation)
+    elif annotation is bool:
+        options = [False, True]
+    elif type(first) in (int, float, Decimal):
+        options = [first + step for step in range(count)]
+    elif type(first) is str:  # "", "1", "2", ... after any min_length padding.
+        options = [first + str(step) if step else first for step in range(count)]
+    elif type(first) in (date, datetime):
+        options = [first + timedelta(days=step) for step in range(count)]
+    else:
+        options = [] if first is MISSING else [first]
+    return options[:count] if len(options) >= count else None
 
 
 def _number(limits: dict[type, Any]) -> Any:

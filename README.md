@@ -434,7 +434,7 @@ assert (filler.fill().id, filler.fill().customer.id) == (UUID(int=7), UUID(int=9
 | Field | Boring value |
 | --- | --- |
 | `X \| None`, `Any` | `None` |
-| `list`, `tuple[X, ...]`, `set`, `dict` | empty; a list or tuple with `min_length` repeats its element's boring value |
+| `list`, `tuple[X, ...]`, `set`, `dict` | empty; a list or tuple with `min_length` repeats its element's boring value, and a set or dict gets distinct elements or keys: that value, then the next ones (`0`, `1`, … or `""`, `"1"`, …) |
 | `tuple[int, str]` | each element's boring value: `(0, "")` |
 | `float`, `Decimal` | `0`, or the whole number nearest 0 that the bounds allow (`gt=0` gives `1.0`) |
 | `int \| str` and other unions | the first member's boring value |
