@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 import pytest
@@ -324,6 +324,92 @@ def test_a_failing_default_factory_propagates(model):
     # Its error once counted as a rejection, retried until GenerationExhausted.
     with pytest.raises(ValueError, match="factory failure"):
         ModelFiller(model, max_attempts=3).fill()
+
+
+class Line(BaseModel):
+    sku: str
+    quantity: int = Field(ge=1)
+    id: UUID
+
+
+class Basket(BaseModel):
+    lines: list[Line] = Field(min_length=2)
+    pair: tuple[Line, Line]
+    counted: tuple[Line, ...] = Field(min_length=1)
+    by_code: dict[str, Line] = Field(min_length=1)
+
+
+class Courier(BaseModel):
+    kind: Literal["courier"]
+    address: str
+
+
+class Pickup(BaseModel):
+    kind: Literal["pickup"]
+    store: str
+
+
+class Never(BaseModel):  # No value fits, so a union passes over it.
+    n: int = Field(ge=1, le=0)
+
+
+class Dispatch(BaseModel):
+    delivery: Courier | Pickup = Field(discriminator="kind")
+    fallback: Never | Pickup
+
+
+class Tree(BaseModel):
+    children: list["Tree"] = Field(min_length=1)
+
+
+def test_collections_and_unions_of_models_are_filled():
+    # Such fields once had no value: a model has no boring value of its own.
+    basket = fill(Basket)
+    line = Line(sku="sku", quantity=1, id=NIL4)
+    assert basket.lines == [line, line] and basket.lines[0] is not basket.lines[1]
+    assert (basket.pair, basket.counted, basket.by_code) == ((line, line), (line,), {"": line})
+    dispatch = fill(Dispatch)  # A branch's tag is the one value its Literal allows.
+    assert dispatch.delivery == Courier(kind="courier", address="address")
+    assert dispatch.fallback == Pickup(kind="pickup", store="store")
+    assert ModelFiller(Basket).explain()["fields"]["lines"]["default"] == "nested models"
+    with pytest.raises(UnsupportedConstraint, match="children: Tree contains itself"):
+        fill(Tree)
+
+
+def test_dicts_inside_given_collections_and_unions_are_completed():
+    # Each dict once had to be a whole model.
+    basket = fill(Basket, lines=[{"quantity": 3}, {}], by_code={"a": {"sku": "x"}})
+    assert [line.quantity for line in basket.lines] == [3, 1]
+    assert (basket.by_code["a"].sku, basket.by_code["a"].quantity) == ("x", 1)
+    dispatch = fill(Dispatch, delivery={"kind": "pickup"})  # The tag picks the branch.
+    assert dispatch.delivery == Pickup(kind="pickup", store="store")
+    with pytest.raises(GenerationExhausted):  # A given list keeps its shape: too short.
+        fill(Basket, lines=[{}])
+
+
+class Van(BaseModel):
+    kind: Literal["van"]
+    plate: UUID
+
+
+class Bike(BaseModel):
+    kind: Literal["bike"]
+
+
+class Fleet(BaseModel):
+    vehicle: Van | Bike = Field(discriminator="kind")
+
+
+def test_providers_reach_into_collections_and_unions():
+    ids = iter(range(100))
+    providers = {"lines.id": lambda: UUID(int=next(ids)), "by_code.id": lambda: UUID(int=99)}
+    basket = ModelFiller(Basket, providers=providers).fill()
+    assert [line.id.int for line in basket.lines] == [0, 1]  # Each element its own value.
+    assert basket.by_code[""].id == UUID(int=99)
+    # A path into a union applies to the members with that field; Bike has no plate.
+    fleet = ModelFiller(Fleet, providers={"vehicle.plate": lambda: UUID(int=7)})
+    assert fleet.fill().vehicle == Van(kind="van", plate=UUID(int=7))
+    assert fleet.fill(vehicle={"kind": "bike"}).vehicle == Bike(kind="bike")
 
 
 def test_a_rejected_boring_value_is_named_in_the_error():

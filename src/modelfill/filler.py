@@ -14,7 +14,7 @@ from pydantic import BaseModel, ValidationError
 
 from .adapters import MISSING, Adapter, FieldSpec, _domain, _resolve, introspect
 from .backend import Solver
-from .boring import boring, nested_model
+from .boring import boring, complete, models_in, nested_model
 from .errors import (
     GenerationExhausted,
     ModelFillError,
@@ -173,18 +173,33 @@ def _contradiction(model: str, given: list[str], rules: list[str]) -> str:
 
 
 def _check_path(model: type, path: str, rest: str | None = None) -> None:
-    """A provider path leads through nested models to a field the solver does not model."""
+    """A provider path leads through nested models to a field the solver does not model.
+    A step may pass through a collection's elements or a union's members: one is enough."""
     name, _, rest = (path if rest is None else rest).partition(".")
     field = next((field for field in _compile(model).adapter.fields if field.name == name), None)
     if field is None:
         raise ValueError(f"Provider {path!r}: {model.__name__} has no field {name!r}")
     if rest:
-        nested = nested_model(field.annotation)
-        if nested is None:
-            raise ValueError(f"Provider {path!r}: {name!r} is not a nested model")
-        _check_path(nested, path, rest)
+        failures: list[Exception] = []
+        for nested in models_in(field.annotation):
+            try:
+                return _check_path(nested, path, rest)
+            except (TypeError, ValueError) as error:
+                failures.append(error)
+        if failures:
+            raise failures[0]
+        raise ValueError(f"Provider {path!r}: {name!r} is not a nested model")
     elif field.domain is not None:
         raise TypeError(f"Provider {path!r}: modelfill solves this field; fix it per fill instead")
+
+
+def _leads(model: type, path: str) -> bool:
+    """Whether a provider path leads anywhere in a model."""
+    try:
+        _check_path(model, path)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 class ModelFiller[T]:
@@ -243,7 +258,8 @@ class ModelFiller[T]:
             elif _domain(_resolve(key)[0]) is not None:
                 raise TypeError(f"Provider {key!r}: modelfill solves such fields")
         self._local = threading.local()
-        self._nested: dict[str, ModelFiller[Any]] = {}  # One filler per nested model field.
+        # One filler per nested model field and model: a union's branches differ.
+        self._nested: dict[tuple[str, type], ModelFiller[Any]] = {}
         self._outer: tuple[type, ...] = ()  # The models this one is nested in.
 
     @property
@@ -517,21 +533,22 @@ class ModelFiller[T]:
 
     def _nested_filler(self, name: str, model: type) -> ModelFiller[Any]:
         """The filler of a nested model field, with this filler's options and providers."""
-        if name not in self._nested:
+        if (name, model) not in self._nested:
             if model in (*self._outer, self.model):
-                raise UnsupportedConstraint(
-                    f"{name}: {model.__name__} contains itself; pass a value"
-                )
+                # Callers name the field.
+                raise UnsupportedConstraint(f"{model.__name__} contains itself; pass a value")
             prefix = f"{name}."
             providers = {
                 key.removeprefix(prefix) if isinstance(key, str) else key: provider
                 for key, provider in self.providers.items()
-                if not isinstance(key, str) or key.startswith(prefix)
+                # A path for another member of a union does not apply here.
+                if not isinstance(key, str)
+                or (key.startswith(prefix) and _leads(model, key.removeprefix(prefix)))
             }
             nested = ModelFiller(model, **self._options, providers=providers)
             nested._outer = (*self._outer, self.model)
-            self._nested[name] = nested
-        return self._nested[name]
+            self._nested[name, model] = nested
+        return self._nested[name, model]
 
     def _fill_nested(self, name: str, model: type, fixed: dict[str, Any]) -> Any:
         """The canonical completion of a nested model completed on its own."""
@@ -574,8 +591,10 @@ class ModelFiller[T]:
                 continue
             nested = nested_model(field.annotation)
             if given is not MISSING:
-                if nested is not None and isinstance(given, dict):  # Completed.
-                    fresh[name] = partial(self._fill_nested, name, nested, given)
+                # A dict that stands for a model, at any depth, is completed.
+                if isinstance(given, (dict, list, tuple)) and models_in(field.annotation):
+                    fill = partial(self._fill_nested, name)
+                    fresh[name] = partial(complete, field.annotation, given, fill)
                     inputs[name] = fresh[name]()
                 else:
                     inputs[name] = given
@@ -592,10 +611,17 @@ class ModelFiller[T]:
                 make = partial(self._fill_nested, name, nested, {})
             elif boring(field.annotation, field.metadata) is not MISSING:
                 make = partial(boring, field.annotation, field.metadata)
+            elif models_in(field.annotation):  # Collections and unions of models.
+                fill = partial(self._fill_nested, name)
+                make = partial(boring, field.annotation, field.metadata, fill)
             else:
                 missing.append(name)
                 continue
-            inputs[name], fresh[name] = make(), make
+            value = make()
+            if value is MISSING:  # Models in a shape with no boring value, such as a set.
+                missing.append(name)
+                continue
+            inputs[name], fresh[name] = value, make
             chosen.add(field.keyword)
         if missing:
             raise UnsupportedConstraint(
@@ -614,6 +640,8 @@ class ModelFiller[T]:
                 source = "nested model"
             elif boring(field.annotation, field.metadata) is not MISSING:
                 source = "boring value"
+            elif models_in(field.annotation):
+                source = "nested models"
             else:
                 source = "required input"
             return {"type": "external", "choices": None, "default": source}

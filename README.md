@@ -398,12 +398,16 @@ its value from the first of these:
 
 1. your value. For a nested model, a dict fixes some of its fields and modelfill
    completes the rest; an instance is used as it is, so it must keep its own
-   model's rules, which Pydantic does not check again;
-2. a provider, keyed by field path or by type; a path beats a type;
+   model's rules, which Pydantic does not check again. Dicts inside a given list,
+   tuple or dict of models are completed the same way, keeping the shape given,
+   and for a union of models the first model member that takes the dict does;
+2. a provider, keyed by field path or by type; a path beats a type, and may lead
+   into a list, tuple, dict or union of models, as `"lines.id"` does;
 3. the model's own default;
 4. for a nested model, its canonical completion; otherwise a boring value. A
    required nested model is solved together with its parent, so the parent's
-   rules can read its fields and a fixed parent field can determine them.
+   rules can read its fields and a fixed parent field can determine them. Models
+   in a list, tuple or dict, or in a union, are completed too.
 
 ```python
 from uuid import UUID
@@ -444,6 +448,8 @@ assert (filler.fill().id, filler.fill().customer.id) == (UUID(int=7), UUID(int=9
 | `UUID`, `UUID4`, … | `00000000-0000-4000-8000-000000000000`, with the version bits the annotation asks for |
 | `bytes`, `time`, `AwareDatetime` | `b""`, `time(0, 0)`, 2025-01-01 00:00 UTC |
 | `PastDate`, `FutureDate` | 2000-01-01 and 2100-01-01, fixed so canonical values stay put; `PastDatetime` and `FutureDatetime` likewise at midnight |
+| `list[M]`, `tuple[M, ...]`, `dict[K, M]` of models | as many canonical completions of `M` as `min_length` asks, each a new object, under the keys above |
+| `A \| B` of models | the first member that fills, in declaration order: a tagged union's first branch, whose tag is the one value its `Literal` allows |
 | `EmailStr`, URLs, `SecretStr` | `user@example.com`, `https://example.com/`, `SecretStr("")` |
 | Flags, unusual enums, mixed `Literal` | the first member |
 

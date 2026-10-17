@@ -173,6 +173,15 @@ nested models and those with defaults are completed on their own, and a rule
 that reads one is unsupported. A model that contains itself is never solved this
 way, so filling it reports the problem.
 
+Models inside a list, tuple or dict, or in a union, are completed on their own
+too. The boring-value walk takes a callback that fills a model wherever the walk
+meets one, so the shapes it already knows, min_length elements and distinct keys,
+hold models without a second walker: each element is a fresh canonical completion,
+and a union whose members have no boring value takes its first member that fills.
+Boring values still come first, so an empty list stays empty. A given value is
+walked the same way, completing each dict that stands for a model and keeping the
+shape. Such fields stay external: no rule can read across their elements.
+
 ## Canonical completion
 
 Canonical completion is incremental pinning on the same solver that proves
