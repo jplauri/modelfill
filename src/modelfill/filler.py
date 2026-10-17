@@ -243,7 +243,8 @@ class ModelFiller[T]:
             elif _domain(_resolve(key)[0]) is not None:
                 raise TypeError(f"Provider {key!r}: modelfill solves such fields")
         self._local = threading.local()
-        self._nested: dict[str, ModelFiller[Any]] = {}  # One filler per nested model field.
+        # One filler per nested model field and model: a union's branches differ.
+        self._nested: dict[tuple[str, type], ModelFiller[Any]] = {}
         self._outer: tuple[type, ...] = ()  # The models this one is nested in.
 
     @property
@@ -517,7 +518,7 @@ class ModelFiller[T]:
 
     def _nested_filler(self, name: str, model: type) -> ModelFiller[Any]:
         """The filler of a nested model field, with this filler's options and providers."""
-        if name not in self._nested:
+        if (name, model) not in self._nested:
             if model in (*self._outer, self.model):
                 raise UnsupportedConstraint(
                     f"{name}: {model.__name__} contains itself; pass a value"
@@ -530,8 +531,8 @@ class ModelFiller[T]:
             }
             nested = ModelFiller(model, **self._options, providers=providers)
             nested._outer = (*self._outer, self.model)
-            self._nested[name] = nested
-        return self._nested[name]
+            self._nested[name, model] = nested
+        return self._nested[name, model]
 
     def _fill_nested(self, name: str, model: type, fixed: dict[str, Any]) -> Any:
         """The canonical completion of a nested model completed on its own."""
