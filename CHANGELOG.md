@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- `explain()` no longer reports `selection`, which was always `"canonical"`.
+
 ### Added
 
 - String patterns: a `pattern` in `Field`, `constr` or `StringConstraints` no

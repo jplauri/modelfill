@@ -650,7 +650,6 @@ class ModelFiller[T]:
             "validator_constraints_active": not bool(compiled.unsupported),
             "can_prove_unsat": not compiled.unsupported and not compiled.unchecked,
             "unsat_requires_explicit_fields": list(compiled.unchecked),
-            "selection": "canonical",
             "max_attempts": self.max_attempts,
             "work_limit_per_check": self.work_limit,
             "timeout_ms_per_check": self.timeout_ms,
