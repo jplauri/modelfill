@@ -15,6 +15,9 @@
 - Dicts inside a given list, tuple or dict of models are completed, keeping the
   shape given: `fill(Order, lines=[{"quantity": 3}])`. For a union of models, the
   first model member that takes the dict completes it, so a tag picks the branch.
+- A provider path may lead into a list, tuple, dict or union of models, as
+  `"lines.id"` does: each element gets its own value, and a path into a union applies
+  to the members that have the field.
 - Naive `time` fields are solved: rules can compare them, bounds such as
   `Field(ge=time(8))` apply, and the canonical value is nearest midnight. A time
   used to be an external field, so a rule reading one failed even in auto mode.

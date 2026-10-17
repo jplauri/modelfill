@@ -173,18 +173,33 @@ def _contradiction(model: str, given: list[str], rules: list[str]) -> str:
 
 
 def _check_path(model: type, path: str, rest: str | None = None) -> None:
-    """A provider path leads through nested models to a field the solver does not model."""
+    """A provider path leads through nested models to a field the solver does not model.
+    A step may pass through a collection's elements or a union's members: one is enough."""
     name, _, rest = (path if rest is None else rest).partition(".")
     field = next((field for field in _compile(model).adapter.fields if field.name == name), None)
     if field is None:
         raise ValueError(f"Provider {path!r}: {model.__name__} has no field {name!r}")
     if rest:
-        nested = nested_model(field.annotation)
-        if nested is None:
-            raise ValueError(f"Provider {path!r}: {name!r} is not a nested model")
-        _check_path(nested, path, rest)
+        failures: list[Exception] = []
+        for nested in models_in(field.annotation):
+            try:
+                return _check_path(nested, path, rest)
+            except (TypeError, ValueError) as error:
+                failures.append(error)
+        if failures:
+            raise failures[0]
+        raise ValueError(f"Provider {path!r}: {name!r} is not a nested model")
     elif field.domain is not None:
         raise TypeError(f"Provider {path!r}: modelfill solves this field; fix it per fill instead")
+
+
+def _leads(model: type, path: str) -> bool:
+    """Whether a provider path leads anywhere in a model."""
+    try:
+        _check_path(model, path)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 class ModelFiller[T]:
@@ -526,7 +541,9 @@ class ModelFiller[T]:
             providers = {
                 key.removeprefix(prefix) if isinstance(key, str) else key: provider
                 for key, provider in self.providers.items()
-                if not isinstance(key, str) or key.startswith(prefix)
+                # A path for another member of a union does not apply here.
+                if not isinstance(key, str)
+                or (key.startswith(prefix) and _leads(model, key.removeprefix(prefix)))
             }
             nested = ModelFiller(model, **self._options, providers=providers)
             nested._outer = (*self._outer, self.model)

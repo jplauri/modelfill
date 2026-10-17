@@ -387,6 +387,31 @@ def test_dicts_inside_given_collections_and_unions_are_completed():
         fill(Basket, lines=[{}])
 
 
+class Van(BaseModel):
+    kind: Literal["van"]
+    plate: UUID
+
+
+class Bike(BaseModel):
+    kind: Literal["bike"]
+
+
+class Fleet(BaseModel):
+    vehicle: Van | Bike = Field(discriminator="kind")
+
+
+def test_providers_reach_into_collections_and_unions():
+    ids = iter(range(100))
+    providers = {"lines.id": lambda: UUID(int=next(ids)), "by_code.id": lambda: UUID(int=99)}
+    basket = ModelFiller(Basket, providers=providers).fill()
+    assert [line.id.int for line in basket.lines] == [0, 1]  # Each element its own value.
+    assert basket.by_code[""].id == UUID(int=99)
+    # A path into a union applies to the members with that field; Bike has no plate.
+    fleet = ModelFiller(Fleet, providers={"vehicle.plate": lambda: UUID(int=7)})
+    assert fleet.fill().vehicle == Van(kind="van", plate=UUID(int=7))
+    assert fleet.fill(vehicle={"kind": "bike"}).vehicle == Bike(kind="bike")
+
+
 def test_a_rejected_boring_value_is_named_in_the_error():
     with pytest.raises(GenerationExhausted, match="value chosen for price; pass a value"):
         fill(Narrow)

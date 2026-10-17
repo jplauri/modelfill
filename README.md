@@ -401,7 +401,8 @@ its value from the first of these:
    model's rules, which Pydantic does not check again. Dicts inside a given list,
    tuple or dict of models are completed the same way, keeping the shape given,
    and for a union of models the first model member that takes the dict does;
-2. a provider, keyed by field path or by type; a path beats a type;
+2. a provider, keyed by field path or by type; a path beats a type, and may lead
+   into a list, tuple, dict or union of models, as `"lines.id"` does;
 3. the model's own default;
 4. for a nested model, its canonical completion; otherwise a boring value. A
    required nested model is solved together with its parent, so the parent's
