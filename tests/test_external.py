@@ -1,7 +1,7 @@
 """Fields the solver does not model: boring values, nested models and providers."""
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID, uuid4
@@ -17,7 +17,11 @@ from pydantic import (
     ConfigDict,
     EmailStr,
     Field,
+    FutureDate,
+    FutureDatetime,
     HttpUrl,
+    PastDate,
+    PastDatetime,
     conlist,
     field_validator,
     model_validator,
@@ -77,6 +81,23 @@ class Everything(BaseModel):
     stamp: AwareDatetime
     site: HttpUrl
     email: EmailStr
+
+
+class Dated(BaseModel):
+    born: PastDate
+    due: FutureDate
+    seen: PastDatetime
+    expires: FutureDatetime
+
+
+def test_past_and_future_dates_get_fixed_values():
+    # These depend on the clock and once got no value at all.
+    assert fill(Dated) == Dated(
+        born=date(2000, 1, 1),
+        due=date(2100, 1, 1),
+        seen=datetime(2000, 1, 1),
+        expires=datetime(2100, 1, 1),
+    )
 
 
 def test_boring_values_per_type():

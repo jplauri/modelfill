@@ -440,6 +440,7 @@ assert (filler.fill().id, filler.fill().customer.id) == (UUID(int=7), UUID(int=9
 | `int \| str` and other unions | the first member's boring value |
 | `UUID`, `UUID4`, … | `00000000-0000-4000-8000-000000000000`, with the version bits the annotation asks for |
 | `bytes`, `time`, `AwareDatetime` | `b""`, `time(0, 0)`, 2025-01-01 00:00 UTC |
+| `PastDate`, `FutureDate` | 2000-01-01 and 2100-01-01, fixed so canonical values stay put; `PastDatetime` and `FutureDatetime` likewise at midnight |
 | `EmailStr`, URLs, `SecretStr` | `user@example.com`, `https://example.com/`, `SecretStr("")` |
 | Flags, unusual enums, mixed `Literal` | the first member |
 
@@ -450,10 +451,9 @@ instance or a dict, at any depth.
 Providers apply only to fields the solver does not model, so one that targets a
 solved field, or a path that does not exist, fails when the filler is created.
 A field with no value from any source, such as one of an arbitrary class, raises
-`UnsupportedConstraint`; pass a value or add a provider. So do `PastDate` and
-`FutureDate`, whose validity depends on the clock. If Pydantic keeps rejecting a
-boring value, for example because of a custom validator, the search ends in
-`GenerationExhausted`, which names the field. Validators that read these fields
+`UnsupportedConstraint`; pass a value or add a provider. If Pydantic keeps
+rejecting a boring value, for example because of a custom validator, the search
+ends in `GenerationExhausted`, which names the field. Validators that read these fields
 remain unsupported logic, an `AfterValidator` in their metadata included, and so
 does other code there, such as `ValidateAs`. A model with either falls back to the
 bounded search; so does a rule that reads an optional nested model or one with a

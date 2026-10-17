@@ -33,6 +33,8 @@
 - `AliasChoices` and `AliasPath` validation aliases work instead of failing even
   in auto mode: a path of keys builds nested dicts, the first such choice is used,
   and a path through a list falls back to the field name when Pydantic accepts it.
+- `PastDate`, `FutureDate`, `PastDatetime` and `FutureDatetime` get fixed boring
+  values, 2000-01-01 and 2100-01-01, instead of none.
 - When the search runs out of readable strings, the error keeps its usual details,
   such as the unsupported logic and the last rejection.
 - A validator that reads a parameter such as `self`, `info` or `cls` as a bare

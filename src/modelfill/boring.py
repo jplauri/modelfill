@@ -21,8 +21,12 @@ from pydantic import (
     AwareDatetime,
     BaseModel,
     EmailStr,
+    FutureDate,
+    FutureDatetime,
     HttpUrl,
     NaiveDatetime,
+    PastDate,
+    PastDatetime,
     SecretBytes,
     SecretStr,
 )
@@ -44,6 +48,11 @@ _SCALARS: dict[Any, Any] = {
     EmailStr: "user@example.com",
     SecretStr: SecretStr(""),
     SecretBytes: SecretBytes(b""),
+    # Fixed, so canonical values stay put: past for good, and future until 2100.
+    PastDate: date(2000, 1, 1),
+    FutureDate: date(2100, 1, 1),
+    PastDatetime: datetime(2000, 1, 1),
+    FutureDatetime: datetime(2100, 1, 1),
 }
 _URLS = (AnyUrl, AnyHttpUrl, HttpUrl)
 _LISTS = (list, abc.Sequence, abc.MutableSequence, abc.Collection, abc.Iterable)
