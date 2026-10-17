@@ -36,6 +36,9 @@ _UNRESOLVED = object()
 # and a dataclass's __post_init__ rejects with any of them.
 _REJECTIONS = (ValueError, AssertionError, PydanticCustomError)
 
+# Kinds that min() and max() compare, one kind at a time.
+_ORDERED = ("int", "date", "datetime", "time", "timedelta")
+
 _OPERATORS = {
     ast.Add: "add",
     ast.Sub: "sub",
@@ -460,6 +463,20 @@ class _Analyzer:
                     return node("len", operand, sort=INT)
             elif any(function is type_ for type_ in TIME_TYPES.values()):
                 return self.time_constant(function, syntax)
+            elif function is abs and len(syntax.args) == 1 and not syntax.keywords:
+                value = self.present(self.expression(syntax.args[0]))
+                if value.sort.kind == "int":
+                    negated = node("neg", value, sort=INT)
+                    return node("ite", node("ge", value, const(0)), value, negated, sort=INT)
+            elif function in (min, max) and len(syntax.args) > 1 and not syntax.keywords:
+                values = [self.present(self.expression(argument)) for argument in syntax.args]
+                kind = values[0].sort.kind
+                if kind in _ORDERED and all(value.sort.kind == kind for value in values):
+                    result = values[0]
+                    for value in values[1:]:  # The first of equal values wins, as in Python.
+                        better = node("lt" if function is min else "gt", value, result)
+                        result = node("ite", better, value, result, sort=Domain(kind))
+                    return result
         raise self.unsupported(syntax, f"unsupported expression {type(syntax).__name__}")
 
     def choice(self, condition: Expr, yes: Expr, no: Expr, syntax: ast.AST) -> Expr:

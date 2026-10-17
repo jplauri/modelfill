@@ -223,6 +223,7 @@ the rules and a pattern cannot both hold, though, the result is
 | Successful return | Original `self` for model validators, original value for field validators; bare return, `return None`, or fallthrough for dataclasses |
 | References | `self.field`, and `self.customer.age` through required nested models; field validator value parameter, or its fields when it validates a nested model; `info.data["earlier_field"]`; previously assigned locals; named constants and standard Enum members from globals/closures |
 | Constants | Integer, Boolean, string, `None`; `date(…)`, `datetime(…)` and `timedelta(…)` calls with integer literal arguments |
+| Builtin calls | `abs(x)` of an integer; `min(…)` and `max(…)` of two or more integers or values of one date/time type, the first of equal values winning as in Python |
 | Arithmetic | Integer/Boolean `+`, `-`, unary `+`/`-`; multiplication with an integer literal operand; `%` and `//` by a positive integer literal; Python's date rules: `datetime ± timedelta`, `datetime - datetime`, `date ± timedelta` (whole days, like `timedelta.days`), `date - date`, `timedelta ± timedelta`, `timedelta * int literal`, `-timedelta` |
 | Comparisons | `==`, `!=`; `<`, `<=`, `>`, `>=` between numbers or two values of one date/time type; chained comparisons; identity checks only against `None` |
 | `None` | `x is None`, `x is not None`, `x == None`, truthiness, `x or default`; an operation that raises `TypeError` on `None` (`x < y`, `x + 1`, `len(x)`) rejects that path, so guard it as Python code does: `x is not None and x < y` |

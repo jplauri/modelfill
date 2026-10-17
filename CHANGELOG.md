@@ -24,6 +24,8 @@
   well as `ValueError`, with or without a `from` clause.
 - Validators may use conditional expressions, `a if c else b`, whose branches have
   one supported type and cannot be `None`.
+- Validators may call `abs()` on an integer, and `min()` or `max()` on two or more
+  integers or values of one date/time type.
 - String patterns: a `pattern` in `Field`, `constr` or `StringConstraints` no
   longer makes a model fall back. Pydantic's own validation decides what matches,
   under either regex engine, and canonical values are spelled from the pattern,

@@ -138,6 +138,12 @@ def conditional_values(self):
     return self
 
 
+def absolute_extremes(self):
+    if abs(self.a - self.b) < 2 or max(self.a, self.b, 0) > 4 or min(self.a, -self.b) < -3:
+        raise ValueError("invalid")
+    return self
+
+
 def other_rejections(self):
     if self.a < 0:
         raise AssertionError("negative")
@@ -165,6 +171,7 @@ def other_rejections(self):
         modulo_and_constants,
         other_rejections,
         conditional_values,
+        absolute_extremes,
     ],
 )
 def test_extraction_and_solver_match_python_exhaustively(validator):
@@ -385,7 +392,7 @@ def loop(self):
 
 
 def call(self):
-    if abs(self.a) > 2:
+    if pow(self.a, 2) > 2:
         raise ValueError("invalid")
     return self
 
