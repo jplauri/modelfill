@@ -47,6 +47,7 @@ from pydantic import (
     Discriminator,
     Field,
     PlainSerializer,
+    RootModel,
     Tag,
     UrlConstraints,
     ValidationError,
@@ -412,7 +413,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
             if not value:
                 continue
         unsupported.append(f"Unsupported Pydantic configuration: {key}={value!r}")
-    if model.__init__ is not BaseModel.__init__:
+    if model.__init__ not in (BaseModel.__init__, RootModel.__init__):  # Pydantic's own.
         unsupported.append("Custom Pydantic __init__ is unsupported")
     if model.__new__ is not BaseModel.__new__:
         unsupported.append("Custom Pydantic __new__ is unsupported")

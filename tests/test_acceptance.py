@@ -15,6 +15,7 @@ from pydantic import (
     AfterValidator,
     BaseModel,
     Field,
+    RootModel,
     ValidationError,
     ValidationInfo,
     create_model,
@@ -374,6 +375,15 @@ def test_wrapped_types_inside_optional_are_solved():
     # Each was an opaque external field, so a rule reading one was unsupported.
     optionals = ModelFiller(Optionals, mode="strict").fill()
     assert (optionals.bounded, optionals.member) == (5, None)
+
+
+class Count(RootModel[int]):
+    root: int = Field(ge=3)
+
+
+def test_root_models_are_supported():
+    # Strict mode once refused RootModel's own __init__ as custom.
+    assert ModelFiller(Count, mode="strict").fill().root == 3
 
 
 def test_new_types_and_type_aliases_are_read_through():

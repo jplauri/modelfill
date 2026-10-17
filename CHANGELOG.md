@@ -39,6 +39,7 @@
 - `AliasChoices` and `AliasPath` validation aliases work instead of failing even
   in auto mode: a path of keys builds nested dicts, the first such choice is used,
   and a path through a list falls back to the field name when Pydantic accepts it.
+- Strict mode accepts a `RootModel`, whose own `__init__` counted as custom.
 - `PastDate`, `FutureDate`, `PastDatetime` and `FutureDatetime` get fixed boring
   values, 2000-01-01 and 2100-01-01, instead of none.
 - A set with `min_length` above one, or a dict with any, gets distinct boring

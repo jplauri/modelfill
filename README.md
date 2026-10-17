@@ -175,7 +175,7 @@ filler.explain()  # fresh JSON-friendly dictionary
 
 | Area | Support |
 | --- | --- |
-| Pydantic | v2 `BaseModel`, inherited validators, scalar fields |
+| Pydantic | v2 `BaseModel` and `RootModel`, inherited validators, scalar fields |
 | Dataclasses | Standard dataclasses, including frozen and slotted classes; pure `__post_init__`, when the generated `__init__` calls it (a subclass that is not decorated again never runs its own) |
 | Types | Exact `int`, `bool`, `str`, `date`, naive `datetime`, naive `time`, `timedelta`; ordinary `Enum`, `IntEnum`, `StrEnum`; homogeneous `Literal` subsets; any of these `\| None` (`Optional`, or `None` inside a `Literal`), also behind a `NewType`, a `type` alias or an `Annotated` inside the `Optional`, whose constraints apply; other types as [external fields](#fields-the-solver-does-not-model) |
 | Numeric metadata | Integer, date, datetime and timedelta `Field(gt, ge, lt, le)`, respecting strict and inclusive bounds; integer `Field(multiple_of)`; on optional fields they constrain non-None values, as in Pydantic |
