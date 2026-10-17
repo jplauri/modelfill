@@ -131,6 +131,13 @@ def modulo_and_constants(self):
     return self
 
 
+def conditional_values(self):
+    limit = 4 if self.b > 0 else -1
+    if self.a > limit or (self.a if self.b else 2) == 3:
+        raise ValueError("over the limit")
+    return self
+
+
 def other_rejections(self):
     if self.a < 0:
         raise AssertionError("negative")
@@ -157,6 +164,7 @@ def other_rejections(self):
         asserts,
         modulo_and_constants,
         other_rejections,
+        conditional_values,
     ],
 )
 def test_extraction_and_solver_match_python_exhaustively(validator):
@@ -440,6 +448,12 @@ def unsupported_unicode(self):
     return self
 
 
+def conditional_none(self):
+    if (None if self.a else 3) == 3:
+        raise ValueError("invalid")
+    return self
+
+
 # A bare parameter or unknown name is not the constant None: these once read as
 # always rejecting, a false proof of impossibility.
 def self_is_none(self):
@@ -484,6 +498,7 @@ def unknown_name(self):
         mixed_boolean_values,
         try_statement,
         unsupported_unicode,
+        conditional_none,
         self_is_none,
         falsy_self,
         info_is_none,

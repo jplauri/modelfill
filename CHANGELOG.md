@@ -22,6 +22,8 @@
   the bounded search. Other annotated callbacks remain unsupported logic.
 - Validators may reject by raising `AssertionError` or `PydanticCustomError` as
   well as `ValueError`, with or without a `from` clause.
+- Validators may use conditional expressions, `a if c else b`, whose branches have
+  one supported type and cannot be `None`.
 - String patterns: a `pattern` in `Field`, `constr` or `StringConstraints` no
   longer makes a model fall back. Pydantic's own validation decides what matches,
   under either regex engine, and canonical values are spelled from the pattern,

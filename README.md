@@ -226,7 +226,7 @@ the rules and a pattern cannot both hold, though, the result is
 | Arithmetic | Integer/Boolean `+`, `-`, unary `+`/`-`; multiplication with an integer literal operand; `%` and `//` by a positive integer literal; Python's date rules: `datetime ± timedelta`, `datetime - datetime`, `date ± timedelta` (whole days, like `timedelta.days`), `date - date`, `timedelta ± timedelta`, `timedelta * int literal`, `-timedelta` |
 | Comparisons | `==`, `!=`; `<`, `<=`, `>`, `>=` between numbers or two values of one date/time type; chained comparisons; identity checks only against `None` |
 | `None` | `x is None`, `x is not None`, `x == None`, truthiness, `x or default`; an operation that raises `TypeError` on `None` (`x < y`, `x + 1`, `len(x)`) rejects that path, so guard it as Python code does: `x is not None and x < y` |
-| Boolean operations | `and`, `or`, `not`, with Python truthiness and short circuit meaning; operand-valued `and`/`or` when operands have the same supported type and cannot be `None` (`x or default` excepted) |
+| Boolean operations | `and`, `or`, `not`, with Python truthiness and short circuit meaning; operand-valued `and`/`or` when operands have the same supported type and cannot be `None` (`x or default` excepted); conditional expressions `a if c else b` on the same terms, where only the branch taken runs |
 | Membership | `in` / `not in` a literal tuple, list or set of supported constants or Enum members, outside comparison chains |
 | Strings | Equality, inequality, truthiness, membership in finite literal collections, builtin `len(field)` |
 | Enums | Equality/inequality within the same Enum type, finite membership, exact member truthiness |

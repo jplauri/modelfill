@@ -431,22 +431,18 @@ class _Analyzer:
                     truths.append(self.truth_value(value, syntax))
             result = values[-1]
             for value, condition in zip(values[-2::-1], truths[::-1], strict=True):
-                if value.sort.kind != result.sort.kind or (
-                    value.sort.kind == "enum"
-                    and self.enum_type(value) is not self.enum_type(result)
-                ):
-                    raise self.unsupported(
-                        syntax, "and/or operands used as values must have the same type"
-                    )
                 yes, no = (result, value) if conjunction else (value, result)
-                if value.sort.kind == "enum":
-                    enum_type = self.enum_type(value)
-                    assert enum_type is not None
-                    sort = Domain("enum", tuple(enum_type))
-                else:
-                    sort = Domain(value.sort.kind)
-                result = node("ite", condition, yes, no, sort=sort)
+                result = self.choice(condition, yes, no, syntax)
             return result
+        if isinstance(syntax, ast.IfExp):
+            condition, safe = self.guarded(self.truth, syntax.test)
+            yes, yes_safe = self.guarded(self.expression, syntax.body)
+            no, no_safe = self.guarded(self.expression, syntax.orelse)
+            if yes.sort.nullable or no.sort.nullable or "none" in (yes.sort.kind, no.sort.kind):
+                raise self.unsupported(syntax, "a conditional value that may be None")
+            # Only the branch taken runs, so only its requirements apply.
+            self.requires += [safe, _or(_not(condition), yes_safe), _or(condition, no_safe)]
+            return self.choice(condition, yes, no, syntax)
         if isinstance(syntax, ast.Compare):
             left = self.expression(syntax.left)
             links: list[Expr] = []
@@ -465,6 +461,20 @@ class _Analyzer:
             elif any(function is type_ for type_ in TIME_TYPES.values()):
                 return self.time_constant(function, syntax)
         raise self.unsupported(syntax, f"unsupported expression {type(syntax).__name__}")
+
+    def choice(self, condition: Expr, yes: Expr, no: Expr, syntax: ast.AST) -> Expr:
+        """yes where condition holds, else no: two values of one supported type."""
+        if yes.sort.kind != no.sort.kind or (
+            yes.sort.kind == "enum" and self.enum_type(yes) is not self.enum_type(no)
+        ):
+            raise self.unsupported(syntax, "values chosen between must have the same type")
+        if yes.sort.kind == "enum":
+            enum_type = self.enum_type(yes)
+            assert enum_type is not None
+            sort = Domain("enum", tuple(enum_type))
+        else:
+            sort = Domain(yes.sort.kind)
+        return node("ite", condition, yes, no, sort=sort)
 
     def field_path(self, syntax: ast.expr) -> str:
         """The field an attribute chain reads: self.customer.age reads "customer.age"."""
