@@ -452,6 +452,23 @@ def test_class_constants_are_read_through_self_and_cls():
     assert ModelFiller(LimitedData, mode="strict").fill().n == 5
 
 
+class Named(BaseModel):
+    small: int
+    large: int
+
+    @field_validator("small", "large")
+    @classmethod
+    def check(cls, value, info):
+        if info.field_name == "large" and value < 10:
+            raise ValueError("a large value is at least 10")
+        return value
+
+
+def test_info_field_name_is_read():
+    # One validator for several fields, told apart by the field's name.
+    assert ModelFiller(Named, mode="strict").fill() == Named(small=0, large=10)
+
+
 def test_field_validator_earlier_field_reads():
     filler = ModelFiller(FieldDependency, mode="strict")
     assert filler.fill(lower=19).upper == 20

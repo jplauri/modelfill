@@ -30,6 +30,8 @@
   as in `self.n < self.LIMIT`.
 - Validators may read an Enum member's `.value` or `.name`, when its type's values
   share one supported type.
+- Validators may read `info.field_name`, so one validator can treat its fields
+  differently.
 - String patterns: a `pattern` in `Field`, `constr` or `StringConstraints` no
   longer makes a model fall back. Pydantic's own validation decides what matches,
   under either regex engine, and canonical values are spelled from the pattern,
