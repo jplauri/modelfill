@@ -99,13 +99,16 @@ class _Analyzer:
         kind: Literal["model", "dataclass", "field"],
         field_name: str | None,
         earlier_fields: Collection[str],
+        constants: Mapping[str, Any],
     ) -> None:
         self.function = function
         self.fields = fields
         self.kind = kind
         self.field_name = field_name
         self.earlier_fields = earlier_fields
+        self.constants = constants
         self.receiver: str | None = None
+        self.owner: str | None = None  # A field validator's cls parameter.
         self.value_name: str | None = None
         self.info_name: str | None = None
         self.local_names: set[str] = set()
@@ -195,7 +198,7 @@ class _Analyzer:
                 self.function.__self__, type
             )
             if bound_class or (names and names[0] == "cls"):
-                names = names[1:]
+                self.owner, names = names[0], names[1:]
             if not 1 <= len(names) <= 2:
                 raise self.unsupported(
                     function, "expected value and optional ValidationInfo arguments"
@@ -356,6 +359,16 @@ class _Analyzer:
             path = self.field_path(syntax)
             if path in self.fields:
                 return var(path, self.fields[path])
+            # A class constant through self or cls: Pydantic sets no ClassVar on an instance.
+            owner = syntax.value
+            if (
+                isinstance(owner, ast.Name)
+                and owner.id in (self.receiver, self.owner)
+                and syntax.attr in self.constants
+            ):
+                value = self.constants[syntax.attr]
+                if type(value) in _CONSTANT_TYPES or isinstance(value, Enum):
+                    return self.constant(value, syntax)
             if isinstance(syntax.value, ast.Name):
                 enum_type = self.resolve(syntax.value.id)
                 if isinstance(enum_type, type) and issubclass(enum_type, Enum):
@@ -628,10 +641,13 @@ def extract_validator(
     kind: Literal["model", "dataclass", "field"] = "model",
     field_name: str | None = None,
     earlier_fields: Collection[str] = (),
+    constants: Mapping[str, Any] | None = None,
 ) -> Expr:
     """Return the complete acceptance predicate or reject the entire validator.
 
     ``fields`` contains validated, canonical Python value types. ``earlier_fields``
     must follow Pydantic's declaration order for ``ValidationInfo.data`` reads.
+    ``constants`` are the class's ClassVars, which ``self.NAME`` or ``cls.NAME`` read.
     """
-    return _Analyzer(function, fields, kind, field_name, earlier_fields).analyze()
+    analyzer = _Analyzer(function, fields, kind, field_name, earlier_fields, constants or {})
+    return analyzer.analyze()

@@ -123,6 +123,7 @@ def _compile_fields(model: type, adapter: Adapter, stack: list[type]) -> _Compil
                 kind=validator.kind,
                 field_name=validator.field_name,
                 earlier_fields=validator.earlier_fields,
+                constants=adapter.constants,
             )
         except UnsupportedConstraint as exc:
             unsupported.append(str(exc))

@@ -18,6 +18,7 @@ from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
+    ClassVar,
     Literal,
     NewType,
     TypeAliasType,
@@ -131,6 +132,7 @@ class Adapter:
     constraints: tuple[tuple[str, Expr], ...]  # (label, rule) for explaining contradictions
     validators: tuple[ValidatorSpec, ...]
     unsupported: tuple[str, ...]
+    constants: dict[str, Any] = dataclasses.field(default_factory=dict)  # Its ClassVars.
 
     def construct(self, values: dict[str, Any]) -> Any:
         """Run the model's real constructor, including its original validators."""
@@ -529,7 +531,12 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         a != b and a[: len(b)] == b for a in paths for b in paths
     ):
         raise UnsupportedConstraint("Multiple fields share the same validation alias")
-    return Adapter(model, tuple(fields), tuple(constraints), tuple(validators), tuple(unsupported))
+    constants = {
+        name: getattr(model, name) for name in model.__class_vars__ if hasattr(model, name)
+    }
+    return Adapter(
+        model, tuple(fields), tuple(constraints), tuple(validators), tuple(unsupported), constants
+    )
 
 
 def _dataclass(model: type[DataclassInstance]) -> Adapter:
@@ -577,7 +584,12 @@ def _dataclass(model: type[DataclassInstance]) -> Adapter:
     code = getattr(initializer, "__code__", None)
     runs = post_init is not None and code is not None and "__post_init__" in code.co_names
     validators = (ValidatorSpec("__post_init__", post_init, "dataclass", "after"),) if runs else ()
-    return Adapter(model, tuple(fields), (), validators, tuple(unsupported))
+    constants = {
+        name: getattr(model, name)
+        for name, hint in annotations.items()
+        if (hint is ClassVar or get_origin(hint) is ClassVar) and hasattr(model, name)
+    }
+    return Adapter(model, tuple(fields), (), validators, tuple(unsupported), constants)
 
 
 def introspect(model: type) -> Adapter:

@@ -412,6 +412,46 @@ def test_times_are_solved():
         filler.fill(opens=time(23, 59, 59, 999999))
 
 
+class Limited(BaseModel):
+    LIMIT: ClassVar[int] = 7
+    n: int
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.n < self.LIMIT:
+            raise ValueError("below the limit")
+        return self
+
+
+class Floored(BaseModel):
+    FLOOR: ClassVar[int] = 3
+    n: int
+
+    @field_validator("n")
+    @classmethod
+    def check(cls, n):
+        if n < cls.FLOOR:
+            raise ValueError("below the floor")
+        return n
+
+
+@dataclass
+class LimitedData:
+    LIMIT: ClassVar[int] = 5
+    n: int
+
+    def __post_init__(self):
+        if self.n < self.LIMIT:
+            raise ValueError("below the limit")
+
+
+def test_class_constants_are_read_through_self_and_cls():
+    # A ClassVar read this way was unsupported logic, found only by search.
+    assert ModelFiller(Limited, mode="strict").fill().n == 7
+    assert ModelFiller(Floored, mode="strict").fill().n == 3
+    assert ModelFiller(LimitedData, mode="strict").fill().n == 5
+
+
 def test_field_validator_earlier_field_reads():
     filler = ModelFiller(FieldDependency, mode="strict")
     assert filler.fill(lower=19).upper == 20
