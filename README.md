@@ -398,7 +398,9 @@ its value from the first of these:
 
 1. your value. For a nested model, a dict fixes some of its fields and modelfill
    completes the rest; an instance is used as it is, so it must keep its own
-   model's rules, which Pydantic does not check again;
+   model's rules, which Pydantic does not check again. Dicts inside a given list,
+   tuple or dict of models are completed the same way, keeping the shape given,
+   and for a union of models the first model member that takes the dict does;
 2. a provider, keyed by field path or by type; a path beats a type;
 3. the model's own default;
 4. for a nested model, its canonical completion; otherwise a boring value. A

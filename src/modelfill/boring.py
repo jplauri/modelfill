@@ -154,6 +154,42 @@ def boring(annotation: Any, metadata: Sequence[Any] = (), fill: Fill | None = No
     return MISSING
 
 
+def complete(annotation: Any, given: Any, fill: Fill) -> Any:
+    """given, with each dict that stands for a model completed by fill(model, dict): in
+    the model's place, as a collection's element or value, or for the first of a
+    union's model members that takes it. The shape stays as given."""
+    annotation = _resolve(annotation)[0]
+    if nested_model(annotation) is annotation:
+        return fill(annotation, given) if isinstance(given, dict) else given
+    origin, args = get_origin(annotation), get_args(annotation)
+    if origin in (Union, types.UnionType):
+        members = [option for option in args if models_in(option)]
+        if not members or not isinstance(given, (dict, list, tuple)):
+            return given
+        failures: list[Exception] = []
+        for option in members:  # A tagged union's tag rules out the other branches.
+            try:
+                return complete(option, given, fill)
+            except (ModelFillError, TypeError, ValueError) as error:
+                failures.append(error)
+        if len(members) < len([option for option in args if option is not type(None)]):
+            return given  # A member without models may take it as it is.
+        raise failures[0]
+    kind = origin or annotation
+    if not args or not isinstance(given, (dict, list, tuple)):
+        return given
+    if kind is tuple and args[-1] is not Ellipsis:  # A fixed shape: one per position.
+        if len(given) != len(args):
+            return given  # Pydantic rejects the shape.
+        return tuple(complete(arg, value, fill) for arg, value in zip(args, given, strict=True))
+    if (kind in _LISTS or kind is tuple) and not isinstance(given, dict):
+        values = [complete(args[0], value, fill) for value in given]
+        return tuple(values) if kind is tuple else values
+    if kind in _MAPPINGS and len(args) == 2 and isinstance(given, dict):
+        return {key: complete(args[1], value, fill) for key, value in given.items()}
+    return given
+
+
 def _first(options: Sequence[Any], fill: Fill) -> Any:
     """The first union member that fill can make, in declaration order, or MISSING."""
     failure = None

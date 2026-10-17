@@ -12,6 +12,9 @@
   getting no value: each element is the model's canonical completion, made anew,
   as many as `min_length` asks, and a union gets its first member that fills, so a
   tagged union gets its first branch.
+- Dicts inside a given list, tuple or dict of models are completed, keeping the
+  shape given: `fill(Order, lines=[{"quantity": 3}])`. For a union of models, the
+  first model member that takes the dict completes it, so a tag picks the branch.
 - Naive `time` fields are solved: rules can compare them, bounds such as
   `Field(ge=time(8))` apply, and the canonical value is nearest midnight. A time
   used to be an external field, so a rule reading one failed even in auto mode.

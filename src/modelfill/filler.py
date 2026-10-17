@@ -14,7 +14,7 @@ from pydantic import BaseModel, ValidationError
 
 from .adapters import MISSING, Adapter, FieldSpec, _domain, _resolve, introspect
 from .backend import Solver
-from .boring import boring, models_in, nested_model
+from .boring import boring, complete, models_in, nested_model
 from .errors import (
     GenerationExhausted,
     ModelFillError,
@@ -574,8 +574,10 @@ class ModelFiller[T]:
                 continue
             nested = nested_model(field.annotation)
             if given is not MISSING:
-                if nested is not None and isinstance(given, dict):  # Completed.
-                    fresh[name] = partial(self._fill_nested, name, nested, given)
+                # A dict that stands for a model, at any depth, is completed.
+                if isinstance(given, (dict, list, tuple)) and models_in(field.annotation):
+                    fill = partial(self._fill_nested, name)
+                    fresh[name] = partial(complete, field.annotation, given, fill)
                     inputs[name] = fresh[name]()
                 else:
                     inputs[name] = given

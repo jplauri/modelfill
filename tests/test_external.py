@@ -376,6 +376,17 @@ def test_collections_and_unions_of_models_are_filled():
         fill(Tree)
 
 
+def test_dicts_inside_given_collections_and_unions_are_completed():
+    # Each dict once had to be a whole model.
+    basket = fill(Basket, lines=[{"quantity": 3}, {}], by_code={"a": {"sku": "x"}})
+    assert [line.quantity for line in basket.lines] == [3, 1]
+    assert (basket.by_code["a"].sku, basket.by_code["a"].quantity) == ("x", 1)
+    dispatch = fill(Dispatch, delivery={"kind": "pickup"})  # The tag picks the branch.
+    assert dispatch.delivery == Pickup(kind="pickup", store="store")
+    with pytest.raises(GenerationExhausted):  # A given list keeps its shape: too short.
+        fill(Basket, lines=[{}])
+
+
 def test_a_rejected_boring_value_is_named_in_the_error():
     with pytest.raises(GenerationExhausted, match="value chosen for price; pass a value"):
         fill(Narrow)
