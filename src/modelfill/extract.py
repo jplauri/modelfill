@@ -17,8 +17,22 @@ from collections.abc import Callable, Collection, Mapping
 from enum import Enum
 from typing import Any, Literal
 
+from pydantic_core import PydanticCustomError
+
 from .errors import UnsupportedConstraint
-from .ir import INT, TIME_TYPES, Domain, Expr, Kind, const, encodable, node, plain_enum, var
+from .ir import (
+    INT,
+    PRIMITIVES,
+    TIME_TYPES,
+    Domain,
+    Expr,
+    Kind,
+    const,
+    encodable,
+    node,
+    plain_enum,
+    var,
+)
 
 # Falsy values for truth tests; dates and datetimes are always truthy.
 _ZERO = {"int": 0, "str": "", "timedelta": datetime.timedelta(0)}
@@ -29,6 +43,13 @@ _CONSTANT_TYPES = (int, bool, str, type(None), *TIME_TYPES.values())
 # A name with no constant value: a parameter, a local or an unknown name. Unlike
 # None, which is a real constant, it is never read as a value.
 _UNRESOLVED = object()
+
+# What a validator may raise to reject: Pydantic turns each into a ValidationError,
+# and a dataclass's __post_init__ rejects with any of them.
+_REJECTIONS = (ValueError, AssertionError, PydanticCustomError)
+
+# Kinds that min() and max() compare, one kind at a time.
+_ORDERED = ("int", "date", "datetime", "time", "timedelta")
 
 _OPERATORS = {
     ast.Add: "add",
@@ -90,13 +111,16 @@ class _Analyzer:
         kind: Literal["model", "dataclass", "field"],
         field_name: str | None,
         earlier_fields: Collection[str],
+        constants: Mapping[str, Any],
     ) -> None:
         self.function = function
         self.fields = fields
         self.kind = kind
         self.field_name = field_name
         self.earlier_fields = earlier_fields
+        self.constants = constants
         self.receiver: str | None = None
+        self.owner: str | None = None  # A field validator's cls parameter.
         self.value_name: str | None = None
         self.info_name: str | None = None
         self.local_names: set[str] = set()
@@ -186,7 +210,7 @@ class _Analyzer:
                 self.function.__self__, type
             )
             if bound_class or (names and names[0] == "cls"):
-                names = names[1:]
+                self.owner, names = names[0], names[1:]
             if not 1 <= len(names) <= 2:
                 raise self.unsupported(
                     function, "expected value and optional ValidationInfo arguments"
@@ -278,13 +302,14 @@ class _Analyzer:
         return accepted, active
 
     def check_raise(self, statement: ast.Raise) -> None:
-        exc = statement.exc
-        if statement.cause is not None:
-            raise self.unsupported(statement, "raise-from is unsupported")
-        if isinstance(exc, ast.Call):
-            exc = exc.func  # Arguments run only on this rejecting path; any message is fine.
-        if not isinstance(exc, ast.Name) or self.resolve(exc.id) is not ValueError:
-            raise self.unsupported(statement, "only raising builtin ValueError is supported")
+        # Arguments and a cause run only on this rejecting path; any message is fine.
+        exc = statement.exc.func if isinstance(statement.exc, ast.Call) else statement.exc
+        if not isinstance(exc, ast.Name) or self.resolve(exc.id) not in _REJECTIONS:
+            raise self.unsupported(
+                statement,
+                "only raising builtin ValueError or AssertionError, or PydanticCustomError,"
+                " is supported",
+            )
 
     def truth(self, syntax: ast.expr) -> Expr:
         # A condition needs truth values, whereas Python and/or used as operands
@@ -307,7 +332,7 @@ class _Analyzer:
             truth = value
         elif kind in _ZERO:
             truth = node("ne", value, const(_ZERO[kind]))
-        elif kind in ("date", "datetime"):
+        elif kind in ("date", "datetime", "time"):  # Midnight is truthy too.
             truth = const(True)
         elif kind == "enum" and value.sort.choices:
             truth = _or(
@@ -346,6 +371,19 @@ class _Analyzer:
             path = self.field_path(syntax)
             if path in self.fields:
                 return var(path, self.fields[path])
+            # A class constant through self or cls: Pydantic sets no ClassVar on an instance.
+            owner = syntax.value
+            if isinstance(owner, ast.Name) and owner.id == self.info_name:
+                if syntax.attr == "field_name":  # None in a model validator, as in Pydantic.
+                    return const(self.field_name)
+            if (
+                isinstance(owner, ast.Name)
+                and owner.id in (self.receiver, self.owner)
+                and syntax.attr in self.constants
+            ):
+                value = self.constants[syntax.attr]
+                if type(value) in _CONSTANT_TYPES or isinstance(value, Enum):
+                    return self.constant(value, syntax)
             if isinstance(syntax.value, ast.Name):
                 enum_type = self.resolve(syntax.value.id)
                 if isinstance(enum_type, type) and issubclass(enum_type, Enum):
@@ -355,6 +393,13 @@ class _Analyzer:
                         )
                     if syntax.attr in enum_type.__members__:
                         return const(enum_type.__members__[syntax.attr])
+            if syntax.attr in ("value", "name"):  # Of an Enum field or member.
+                try:
+                    member = self.expression(syntax.value)
+                except UnsupportedConstraint:
+                    member = None
+                if member is not None and member.sort.kind == "enum" and member.sort.choices:
+                    return self.member_attribute(member, syntax.attr, syntax)
             raise self.unsupported(
                 syntax, "only model fields and literal Enum members are supported attributes"
             )
@@ -424,22 +469,18 @@ class _Analyzer:
                     truths.append(self.truth_value(value, syntax))
             result = values[-1]
             for value, condition in zip(values[-2::-1], truths[::-1], strict=True):
-                if value.sort.kind != result.sort.kind or (
-                    value.sort.kind == "enum"
-                    and self.enum_type(value) is not self.enum_type(result)
-                ):
-                    raise self.unsupported(
-                        syntax, "and/or operands used as values must have the same type"
-                    )
                 yes, no = (result, value) if conjunction else (value, result)
-                if value.sort.kind == "enum":
-                    enum_type = self.enum_type(value)
-                    assert enum_type is not None
-                    sort = Domain("enum", tuple(enum_type))
-                else:
-                    sort = Domain(value.sort.kind)
-                result = node("ite", condition, yes, no, sort=sort)
+                result = self.choice(condition, yes, no, syntax)
             return result
+        if isinstance(syntax, ast.IfExp):
+            condition, safe = self.guarded(self.truth, syntax.test)
+            yes, yes_safe = self.guarded(self.expression, syntax.body)
+            no, no_safe = self.guarded(self.expression, syntax.orelse)
+            if yes.sort.nullable or no.sort.nullable or "none" in (yes.sort.kind, no.sort.kind):
+                raise self.unsupported(syntax, "a conditional value that may be None")
+            # Only the branch taken runs, so only its requirements apply.
+            self.requires += [safe, _or(_not(condition), yes_safe), _or(condition, no_safe)]
+            return self.choice(condition, yes, no, syntax)
         if isinstance(syntax, ast.Compare):
             left = self.expression(syntax.left)
             links: list[Expr] = []
@@ -457,7 +498,52 @@ class _Analyzer:
                     return node("len", operand, sort=INT)
             elif any(function is type_ for type_ in TIME_TYPES.values()):
                 return self.time_constant(function, syntax)
+            elif function is abs and len(syntax.args) == 1 and not syntax.keywords:
+                value = self.present(self.expression(syntax.args[0]))
+                if value.sort.kind == "int":
+                    negated = node("neg", value, sort=INT)
+                    return node("ite", node("ge", value, const(0)), value, negated, sort=INT)
+            elif function in (min, max) and len(syntax.args) > 1 and not syntax.keywords:
+                values = [self.present(self.expression(argument)) for argument in syntax.args]
+                kind = values[0].sort.kind
+                if kind in _ORDERED and all(value.sort.kind == kind for value in values):
+                    result = values[0]
+                    for value in values[1:]:  # The first of equal values wins, as in Python.
+                        better = node("lt" if function is min else "gt", value, result)
+                        result = node("ite", better, value, result, sort=Domain(kind))
+                    return result
         raise self.unsupported(syntax, f"unsupported expression {type(syntax).__name__}")
+
+    def choice(self, condition: Expr, yes: Expr, no: Expr, syntax: ast.AST) -> Expr:
+        """yes where condition holds, else no: two values of one supported type."""
+        if yes.sort.kind != no.sort.kind or (
+            yes.sort.kind == "enum" and self.enum_type(yes) is not self.enum_type(no)
+        ):
+            raise self.unsupported(syntax, "values chosen between must have the same type")
+        if yes.sort.kind == "enum":
+            enum_type = self.enum_type(yes)
+            assert enum_type is not None
+            sort = Domain("enum", tuple(enum_type))
+        else:
+            sort = Domain(yes.sort.kind)
+        return node("ite", condition, yes, no, sort=sort)
+
+    def member_attribute(self, member: Expr, attribute: str, syntax: ast.AST) -> Expr:
+        """An Enum member's value or name, chosen among the members it can be."""
+        choices = member.sort.choices or ()
+        items = [getattr(choice, attribute) for choice in choices]
+        sort = PRIMITIVES.get(type(items[0]))
+        if sort is None or any(type(item) is not type(items[0]) for item in items):
+            raise self.unsupported(syntax, f"Enum {attribute}s must share one supported type")
+        if not all(encodable(item) for item in items):
+            raise self.unsupported(syntax, "string constants above U+2FFFF are unsupported")
+        if member.op == "const":
+            return const(getattr(member.value, attribute))
+        member = self.present(member)  # None has neither: Python raises AttributeError.
+        result = const(items[-1])
+        for choice, item in zip(choices[-2::-1], items[-2::-1], strict=True):
+            result = node("ite", node("eq", member, const(choice)), const(item), result, sort=sort)
+        return result
 
     def field_path(self, syntax: ast.expr) -> str:
         """The field an attribute chain reads: self.customer.age reads "customer.age"."""
@@ -549,7 +635,12 @@ class _Analyzer:
         # Ordering raises TypeError for None, so it requires values.
         left, right = self.present(left), self.present(right)
         kinds = {left.sort.kind, right.sort.kind}
-        if not kinds <= {"int", "bool"} and kinds not in ({"date"}, {"datetime"}, {"timedelta"}):
+        if not kinds <= {"int", "bool"} and kinds not in (
+            {"date"},
+            {"datetime"},
+            {"time"},
+            {"timedelta"},
+        ):
             raise self.unsupported(
                 syntax, "ordering needs integers/Booleans or two values of one date/time type"
             )
@@ -589,10 +680,13 @@ def extract_validator(
     kind: Literal["model", "dataclass", "field"] = "model",
     field_name: str | None = None,
     earlier_fields: Collection[str] = (),
+    constants: Mapping[str, Any] | None = None,
 ) -> Expr:
     """Return the complete acceptance predicate or reject the entire validator.
 
     ``fields`` contains validated, canonical Python value types. ``earlier_fields``
     must follow Pydantic's declaration order for ``ValidationInfo.data`` reads.
+    ``constants`` are the class's ClassVars, which ``self.NAME`` or ``cls.NAME`` read.
     """
-    return _Analyzer(function, fields, kind, field_name, earlier_fields).analyze()
+    analyzer = _Analyzer(function, fields, kind, field_name, earlier_fields, constants or {})
+    return analyzer.analyze()

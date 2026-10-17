@@ -3,10 +3,10 @@
 import random
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from enum import Enum
 from itertools import product
-from typing import Annotated, ClassVar, Literal, get_args
+from typing import Annotated, ClassVar, Literal, NewType, get_args
 from uuid import UUID, uuid4
 
 import pytest
@@ -15,6 +15,7 @@ from pydantic import (
     AfterValidator,
     BaseModel,
     Field,
+    RootModel,
     ValidationError,
     ValidationInfo,
     create_model,
@@ -342,6 +343,130 @@ class FieldDependency(BaseModel):
         if value <= info.data["lower"]:
             raise ValueError("upper must exceed lower")
         return value
+
+
+UserId = NewType("UserId", int)
+Token = NewType("Token", UUID)
+Small = NewType("Small", Annotated[int, Le(5)])
+type Adult = Annotated[int, Ge(18)]
+type Labels = list[str]
+
+
+class Member(BaseModel):
+    id: UserId
+    token: Token
+    small: Small = Field(ge=3)  # Pydantic merges Le(5) from the NewType with ge=3.
+    age: Adult
+    labels: Labels
+
+
+class Optionals(BaseModel):
+    bounded: Annotated[int, Field(ge=5)] | None
+    member: UserId | None
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.bounded is None:
+            raise ValueError("a bound is needed")
+        return self
+
+
+def test_wrapped_types_inside_optional_are_solved():
+    # Each was an opaque external field, so a rule reading one was unsupported.
+    optionals = ModelFiller(Optionals, mode="strict").fill()
+    assert (optionals.bounded, optionals.member) == (5, None)
+
+
+class Count(RootModel[int]):
+    root: int = Field(ge=3)
+
+
+def test_root_models_are_supported():
+    # Strict mode once refused RootModel's own __init__ as custom.
+    assert ModelFiller(Count, mode="strict").fill().root == 3
+
+
+def test_new_types_and_type_aliases_are_read_through():
+    # These once had no value at all, solved or boring.
+    member = ModelFiller(Member, mode="strict").fill()
+    assert (member.id, member.small, member.age, member.labels) == (0, 3, 18, [])
+    assert member.token == UUID("00000000-0000-4000-8000-000000000000")
+
+
+class Opening(BaseModel):
+    opens: time = Field(ge=time(8))
+    closes: time
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.closes <= self.opens:
+            raise ValueError("it must close after it opens")
+        return self
+
+
+def test_times_are_solved():
+    # A time was an external field, so this rule was unsupported and auto mode failed.
+    filler = ModelFiller(Opening, mode="strict")
+    assert (filler.fill().opens, filler.fill().closes) == (time(8), time(8, 0, 0, 1))
+    with pytest.raises(UnsatisfiableConstraints):  # Nothing comes after the last instant.
+        filler.fill(opens=time(23, 59, 59, 999999))
+
+
+class Limited(BaseModel):
+    LIMIT: ClassVar[int] = 7
+    n: int
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.n < self.LIMIT:
+            raise ValueError("below the limit")
+        return self
+
+
+class Floored(BaseModel):
+    FLOOR: ClassVar[int] = 3
+    n: int
+
+    @field_validator("n")
+    @classmethod
+    def check(cls, n):
+        if n < cls.FLOOR:
+            raise ValueError("below the floor")
+        return n
+
+
+@dataclass
+class LimitedData:
+    LIMIT: ClassVar[int] = 5
+    n: int
+
+    def __post_init__(self):
+        if self.n < self.LIMIT:
+            raise ValueError("below the limit")
+
+
+def test_class_constants_are_read_through_self_and_cls():
+    # A ClassVar read this way was unsupported logic, found only by search.
+    assert ModelFiller(Limited, mode="strict").fill().n == 7
+    assert ModelFiller(Floored, mode="strict").fill().n == 3
+    assert ModelFiller(LimitedData, mode="strict").fill().n == 5
+
+
+class Named(BaseModel):
+    small: int
+    large: int
+
+    @field_validator("small", "large")
+    @classmethod
+    def check(cls, value, info):
+        if info.field_name == "large" and value < 10:
+            raise ValueError("a large value is at least 10")
+        return value
+
+
+def test_info_field_name_is_read():
+    # One validator for several fields, told apart by the field's name.
+    assert ModelFiller(Named, mode="strict").fill() == Named(small=0, large=10)
 
 
 def test_field_validator_earlier_field_reads():

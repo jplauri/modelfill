@@ -12,7 +12,7 @@ from typing import Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, ValidationError
 
-from .adapters import MISSING, Adapter, FieldSpec, _domain, introspect
+from .adapters import MISSING, Adapter, FieldSpec, _domain, _resolve, introspect
 from .backend import Solver
 from .boring import boring, nested_model
 from .errors import (
@@ -123,6 +123,7 @@ def _compile_fields(model: type, adapter: Adapter, stack: list[type]) -> _Compil
                 kind=validator.kind,
                 field_name=validator.field_name,
                 earlier_fields=validator.earlier_fields,
+                constants=adapter.constants,
             )
         except UnsupportedConstraint as exc:
             unsupported.append(str(exc))
@@ -239,7 +240,7 @@ class ModelFiller[T]:
                 raise TypeError(f"Provider {key!r} must be a zero-argument callable")
             if isinstance(key, str):
                 _check_path(model, key)
-            elif _domain(key) is not None:
+            elif _domain(_resolve(key)[0]) is not None:
                 raise TypeError(f"Provider {key!r}: modelfill solves such fields")
         self._local = threading.local()
         self._nested: dict[str, ModelFiller[Any]] = {}  # One filler per nested model field.

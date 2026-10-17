@@ -5,11 +5,11 @@ from __future__ import annotations
 import operator
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from enum import Enum, EnumType, Flag, IntEnum, ReprEnum, StrEnum
 from typing import Any, Literal
 
-Kind = Literal["int", "bool", "str", "enum", "none", "date", "datetime", "timedelta"]
+Kind = Literal["int", "bool", "str", "enum", "none", "date", "datetime", "time", "timedelta"]
 
 
 @dataclass(frozen=True)
@@ -36,35 +36,41 @@ INT = Domain("int")
 BOOL = Domain("bool")
 STR = Domain("str")
 NONE = Domain("none", (None,))  # For None constants; fields use nullable domains.
-TIME_TYPES: dict[Kind, type[date] | type[timedelta]] = {
+TIME_TYPES: dict[Kind, type[date] | type[time] | type[timedelta]] = {
     "date": date,
     "datetime": datetime,
+    "time": time,
     "timedelta": timedelta,
 }
 PRIMITIVES = {int: INT, bool: BOOL, str: STR} | {t: Domain(k) for k, t in TIME_TYPES.items()}
 
-# Dates count days; naive datetimes and timedeltas count microseconds. Both
-# preserve order and turn Python's date arithmetic into integer arithmetic.
+# Dates count days; naive datetimes and timedeltas count microseconds, and naive
+# times those since midnight. All preserve order and turn Python's date
+# arithmetic into integer arithmetic; times have none.
 DAY = timedelta(days=1) // timedelta(microseconds=1)
 
 
-def encode(value: int | date | datetime | timedelta) -> int:
+def encode(value: int | date | datetime | time | timedelta) -> int:
     if isinstance(value, timedelta):
         return value // timedelta(microseconds=1)
     if isinstance(value, datetime):  # Before date: every datetime is also a date.
         return (value - datetime.min) // timedelta(microseconds=1)
     if isinstance(value, date):
         return value.toordinal()
+    if isinstance(value, time):
+        return (value.hour * 3600 + value.minute * 60 + value.second) * 10**6 + value.microsecond
     return value
 
 
-def decode(kind: str, number: int) -> int | date | datetime | timedelta:
+def decode(kind: str, number: int) -> int | date | datetime | time | timedelta:
     if kind == "int":
         return number
     if kind == "timedelta":
         return timedelta(microseconds=number)
     if kind == "datetime":
         return datetime.min + timedelta(microseconds=number)
+    if kind == "time":
+        return (datetime.min + timedelta(microseconds=number)).time()
     return date.fromordinal(number)
 
 

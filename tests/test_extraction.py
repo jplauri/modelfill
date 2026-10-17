@@ -10,6 +10,7 @@ from enum import Enum, IntEnum
 from types import SimpleNamespace
 
 import pytest
+from pydantic_core import PydanticCustomError
 
 from modelfill.backend import Solver
 from modelfill.errors import UnsupportedConstraint
@@ -130,6 +131,29 @@ def modulo_and_constants(self):
     return self
 
 
+def conditional_values(self):
+    limit = 4 if self.b > 0 else -1
+    if self.a > limit or (self.a if self.b else 2) == 3:
+        raise ValueError("over the limit")
+    return self
+
+
+def absolute_extremes(self):
+    if abs(self.a - self.b) < 2 or max(self.a, self.b, 0) > 4 or min(self.a, -self.b) < -3:
+        raise ValueError("invalid")
+    return self
+
+
+def other_rejections(self):
+    if self.a < 0:
+        raise AssertionError("negative")
+    if self.b == self.a:
+        raise PydanticCustomError("equal", "a and b must differ")
+    if self.b > 4:
+        raise ValueError("large") from None
+    return self
+
+
 @pytest.mark.parametrize(
     "validator",
     [
@@ -145,6 +169,9 @@ def modulo_and_constants(self):
         local_variables,
         asserts,
         modulo_and_constants,
+        other_rejections,
+        conditional_values,
+        absolute_extremes,
     ],
 )
 def test_extraction_and_solver_match_python_exhaustively(validator):
@@ -216,6 +243,12 @@ class Color(Enum):
 class Number(IntEnum):
     ZERO = 0
     ONE = 1
+
+
+def enum_attributes(self):
+    if self.a.value == "blue" and self.b.name != "ZERO" or Color.RED.value == self.a.name:
+        raise ValueError("invalid")
+    return self
 
 
 def enum_validation(self):
@@ -295,6 +328,7 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
         (none_validation, {"a": INT, "b": INT}, {"a": range(2), "b": range(2)}),
         (always_reject, {}, {}),
         (unreachable_code, {}, {}),
+        (enum_attributes, {"a": COLORS, "b": NUMBERS}, {"a": Color, "b": Number}),
     ],
 )
 def test_typed_fields_match_python_exhaustively(validator, fields, grid):
@@ -365,7 +399,7 @@ def loop(self):
 
 
 def call(self):
-    if abs(self.a) > 2:
+    if pow(self.a, 2) > 2:
         raise ValueError("invalid")
     return self
 
@@ -428,6 +462,12 @@ def unsupported_unicode(self):
     return self
 
 
+def conditional_none(self):
+    if (None if self.a else 3) == 3:
+        raise ValueError("invalid")
+    return self
+
+
 # A bare parameter or unknown name is not the constant None: these once read as
 # always rejecting, a false proof of impossibility.
 def self_is_none(self):
@@ -472,6 +512,7 @@ def unknown_name(self):
         mixed_boolean_values,
         try_statement,
         unsupported_unicode,
+        conditional_none,
         self_is_none,
         falsy_self,
         info_is_none,

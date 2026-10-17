@@ -175,15 +175,15 @@ filler.explain()  # fresh JSON-friendly dictionary
 
 | Area | Support |
 | --- | --- |
-| Pydantic | v2 `BaseModel`, inherited validators, scalar fields |
+| Pydantic | v2 `BaseModel` and `RootModel`, inherited validators, scalar fields |
 | Dataclasses | Standard dataclasses, including frozen and slotted classes; pure `__post_init__`, when the generated `__init__` calls it (a subclass that is not decorated again never runs its own) |
-| Types | Exact `int`, `bool`, `str`, `date`, naive `datetime`, `timedelta`; ordinary `Enum`, `IntEnum`, `StrEnum`; homogeneous `Literal` subsets; any of these `\| None` (`Optional`, or `None` inside a `Literal`); other types as [external fields](#fields-the-solver-does-not-model) |
+| Types | Exact `int`, `bool`, `str`, `date`, naive `datetime`, naive `time`, `timedelta`; ordinary `Enum`, `IntEnum`, `StrEnum`; homogeneous `Literal` subsets; any of these `\| None` (`Optional`, or `None` inside a `Literal`), also behind a `NewType`, a `type` alias or an `Annotated` inside the `Optional`, whose constraints apply; other types as [external fields](#fields-the-solver-does-not-model) |
 | Numeric metadata | Integer, date, datetime and timedelta `Field(gt, ge, lt, le)`, respecting strict and inclusive bounds; integer `Field(multiple_of)`; on optional fields they constrain non-None values, as in Pydantic |
 | String metadata | `Field(min_length, max_length)` and global `str_min_length` / `str_max_length`; a [`pattern`](#string-patterns), with either regex engine |
 | Model validators | Instance `@model_validator(mode="after")`, returning the original `self` on successful paths |
 | Field validators | `@field_validator(mode="after")`, and `Annotated[..., AfterValidator(f)]` with a named function `f`, returning the original value, including literal `info.data["earlier_field"]` reads |
 | Nested models | A required nested model (Pydantic or dataclass) is solved with its parent: rules may read `self.customer.age`, and a dict fixes some of its fields. Optional nested models and those with defaults are completed on their own |
-| Aliases | Simple, distinct string input/validation aliases; API still uses field names |
+| Aliases | Distinct string input/validation aliases, `AliasPath`s of keys into nested dicts, and `AliasChoices`, of which the first such choice is used, else the field name if Pydantic accepts it; API still uses field names |
 | Defaults | Copied values and zero-argument factories as preferences |
 | Fixed fields | Any subset, solved simultaneously; no left-to-right dependency order required |
 
@@ -219,17 +219,18 @@ the rules and a pattern cannot both hold, though, the result is
 | Construct | Accepted forms |
 | --- | --- |
 | Statements | `if` / `elif` / `else`, `pass`, string docstrings, `assert`, supported `raise`, supported `return`, single-name local assignments (`x = …`, `x: T = …`) outside branches, other than to validator parameters |
-| Rejection | `raise ValueError` with any message, including f-strings (messages only run on paths that already reject), without a `from` clause; a failing `assert`, which `python -O` removes as usual |
+| Rejection | `raise` of builtin `ValueError` or `AssertionError`, or of `PydanticCustomError`, with any message, including f-strings, and any `from` clause (both only run on paths that already reject); a failing `assert`, which `python -O` removes as usual |
 | Successful return | Original `self` for model validators, original value for field validators; bare return, `return None`, or fallthrough for dataclasses |
-| References | `self.field`, and `self.customer.age` through required nested models; field validator value parameter, or its fields when it validates a nested model; `info.data["earlier_field"]`; previously assigned locals; named constants and standard Enum members from globals/closures |
+| References | `self.field`, and `self.customer.age` through required nested models; field validator value parameter, or its fields when it validates a nested model; `info.data["earlier_field"]`, and `info.field_name`; previously assigned locals; named constants and standard Enum members from globals/closures, and the class's `ClassVar` constants through `self` or `cls` |
 | Constants | Integer, Boolean, string, `None`; `date(…)`, `datetime(…)` and `timedelta(…)` calls with integer literal arguments |
+| Builtin calls | `abs(x)` of an integer; `min(…)` and `max(…)` of two or more integers or values of one date/time type, the first of equal values winning as in Python |
 | Arithmetic | Integer/Boolean `+`, `-`, unary `+`/`-`; multiplication with an integer literal operand; `%` and `//` by a positive integer literal; Python's date rules: `datetime ± timedelta`, `datetime - datetime`, `date ± timedelta` (whole days, like `timedelta.days`), `date - date`, `timedelta ± timedelta`, `timedelta * int literal`, `-timedelta` |
 | Comparisons | `==`, `!=`; `<`, `<=`, `>`, `>=` between numbers or two values of one date/time type; chained comparisons; identity checks only against `None` |
 | `None` | `x is None`, `x is not None`, `x == None`, truthiness, `x or default`; an operation that raises `TypeError` on `None` (`x < y`, `x + 1`, `len(x)`) rejects that path, so guard it as Python code does: `x is not None and x < y` |
-| Boolean operations | `and`, `or`, `not`, with Python truthiness and short circuit meaning; operand-valued `and`/`or` when operands have the same supported type and cannot be `None` (`x or default` excepted) |
+| Boolean operations | `and`, `or`, `not`, with Python truthiness and short circuit meaning; operand-valued `and`/`or` when operands have the same supported type and cannot be `None` (`x or default` excepted); conditional expressions `a if c else b` on the same terms, where only the branch taken runs |
 | Membership | `in` / `not in` a literal tuple, list or set of supported constants or Enum members, outside comparison chains |
 | Strings | Equality, inequality, truthiness, membership in finite literal collections, builtin `len(field)` |
-| Enums | Equality/inequality within the same Enum type, finite membership, exact member truthiness |
+| Enums | Equality/inequality within the same Enum type, finite membership, exact member truthiness; a member's `.value` and `.name`, when its type's values share one supported type |
 
 Early returns and nested branches are analyzed as paths. Rejection conditions
 are not blindly negated. The entire relevant validator must be understood;
@@ -242,18 +243,19 @@ Field types the solver does not model (floats, containers, nested models, UUIDs,
 aware datetimes, other unions, mixed-type Literals, Flags, custom Enum behavior,
 …) become external fields, described above. Unsupported **constructor shapes**
 fail explicitly: Pydantic dataclasses, dataclass `InitVar` / `init=False`
-fields, and complex or duplicate aliases.
+fields, duplicate aliases, and alias paths through a list that Pydantic cannot
+replace with the field name.
 
 Validator code outside the [language above](#exact-recognized-validator-language)
-is unsupported **validation logic**, for example loops, calls and string methods,
-`try`, `with` and `match`, mutation, other exception classes and transformed
-return values. So are async, generator and wrapped validators, validators
-without retrievable source, and these Pydantic features: `before`, `plain` or
-`wrap` validators; legacy validators; Annotated validation callbacks; other
-field metadata, such as `StringConstraints(to_lower=True)`; transforming model
-config; custom initialization, core schema, attribute hooks and a custom
-`model_post_init` (private attributes are fine); and data-dependent default
-factories.
+is unsupported **validation logic**, for example loops, other calls and string
+methods, `try`, `with` and `match`, mutation, other exception classes and
+transformed return values. So are async, generator and wrapped validators,
+validators without retrievable source, and these Pydantic features: `before`,
+`plain` or `wrap` validators; legacy validators; Annotated callbacks other than
+a pure `AfterValidator`; other field metadata, such as
+`StringConstraints(to_lower=True)`; transforming model config; custom
+initialization, core schema, attribute hooks and a custom `model_post_init`
+(private attributes are fine); and data-dependent default factories.
 
 In **strict** mode, unsupported validation logic raises `UnsupportedConstraint`
 when the filler is created. In **auto** mode it appears in
@@ -326,6 +328,7 @@ never depends on call order, earlier calls, the thread or machine speed.
 | --- | --- |
 | `int` | nearest `0` |
 | `timedelta` | nearest `timedelta(0)` |
+| naive `time` | nearest midnight |
 | `date` | nearest 2025-01-01 |
 | naive `datetime` | nearest 2025-01-01 00:00 |
 | `bool` | `False` |
@@ -434,12 +437,13 @@ assert (filler.fill().id, filler.fill().customer.id) == (UUID(int=7), UUID(int=9
 | Field | Boring value |
 | --- | --- |
 | `X \| None`, `Any` | `None` |
-| `list`, `tuple[X, ...]`, `set`, `dict` | empty; a list or tuple with `min_length` repeats its element's boring value |
+| `list`, `tuple[X, ...]`, `set`, `dict` | empty; a list or tuple with `min_length` repeats its element's boring value, and a set or dict gets distinct elements or keys: that value, then the next ones (`0`, `1`, … or `""`, `"1"`, …) |
 | `tuple[int, str]` | each element's boring value: `(0, "")` |
 | `float`, `Decimal` | `0`, or the whole number nearest 0 that the bounds allow (`gt=0` gives `1.0`) |
 | `int \| str` and other unions | the first member's boring value |
 | `UUID`, `UUID4`, … | `00000000-0000-4000-8000-000000000000`, with the version bits the annotation asks for |
 | `bytes`, `time`, `AwareDatetime` | `b""`, `time(0, 0)`, 2025-01-01 00:00 UTC |
+| `PastDate`, `FutureDate` | 2000-01-01 and 2100-01-01, fixed so canonical values stay put; `PastDatetime` and `FutureDatetime` likewise at midnight |
 | `EmailStr`, URLs, `SecretStr` | `user@example.com`, `https://example.com/`, `SecretStr("")` |
 | Flags, unusual enums, mixed `Literal` | the first member |
 
@@ -450,10 +454,9 @@ instance or a dict, at any depth.
 Providers apply only to fields the solver does not model, so one that targets a
 solved field, or a path that does not exist, fails when the filler is created.
 A field with no value from any source, such as one of an arbitrary class, raises
-`UnsupportedConstraint`; pass a value or add a provider. So do `PastDate` and
-`FutureDate`, whose validity depends on the clock. If Pydantic keeps rejecting a
-boring value, for example because of a custom validator, the search ends in
-`GenerationExhausted`, which names the field. Validators that read these fields
+`UnsupportedConstraint`; pass a value or add a provider. If Pydantic keeps
+rejecting a boring value, for example because of a custom validator, the search
+ends in `GenerationExhausted`, which names the field. Validators that read these fields
 remain unsupported logic, an `AfterValidator` in their metadata included, and so
 does other code there, such as `ValidateAs`. A model with either falls back to the
 bounded search; so does a rule that reads an optional nested model or one with a

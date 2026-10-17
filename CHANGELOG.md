@@ -8,12 +8,30 @@
 
 ### Added
 
+- Naive `time` fields are solved: rules can compare them, bounds such as
+  `Field(ge=time(8))` apply, and the canonical value is nearest midnight. A time
+  used to be an external field, so a rule reading one failed even in auto mode.
+- A type wrapped inside `Optional`, such as `Annotated[int, Field(ge=5)] | None` or
+  a `NewType` there, is solved, its constraints holding for non-None values. It
+  was an external field, so rules could not read it.
 - `Annotated[..., AfterValidator(f)]` with a named function is analyzed like
   `@field_validator(mode="after")`: a pure check, which returns the value it was
   given, is modeled, so strict mode accepts it and it can prove a model
   impossible. A reusable checked type such as
   `PackSize = Annotated[int, AfterValidator(multiple_of_four)]` now fills without
   the bounded search. Other annotated callbacks remain unsupported logic.
+- Validators may reject by raising `AssertionError` or `PydanticCustomError` as
+  well as `ValueError`, with or without a `from` clause.
+- Validators may use conditional expressions, `a if c else b`, whose branches have
+  one supported type and cannot be `None`.
+- Validators may call `abs()` on an integer, and `min()` or `max()` on two or more
+  integers or values of one date/time type.
+- Validators may read the class's `ClassVar` constants through `self` or `cls`,
+  as in `self.n < self.LIMIT`.
+- Validators may read an Enum member's `.value` or `.name`, when its type's values
+  share one supported type.
+- Validators may read `info.field_name`, so one validator can treat its fields
+  differently.
 - String patterns: a `pattern` in `Field`, `constr` or `StringConstraints` no
   longer makes a model fall back. Pydantic's own validation decides what matches,
   under either regex engine, and canonical values are spelled from the pattern,
@@ -26,6 +44,18 @@
 
 ### Fixed
 
+- A `NewType` field and a PEP 695 `type` alias are read through to the type they
+  wrap, with the constraints they carry, as Pydantic reads them: a
+  `NewType("UserId", int)` field is solved, and `type Adult = Annotated[int,
+  Ge(18)]` gives 18. Such fields used to get no value at all.
+- `AliasChoices` and `AliasPath` validation aliases work instead of failing even
+  in auto mode: a path of keys builds nested dicts, the first such choice is used,
+  and a path through a list falls back to the field name when Pydantic accepts it.
+- Strict mode accepts a `RootModel`, whose own `__init__` counted as custom.
+- `PastDate`, `FutureDate`, `PastDatetime` and `FutureDatetime` get fixed boring
+  values, 2000-01-01 and 2100-01-01, instead of none.
+- A set with `min_length` above one, or a dict with any, gets distinct boring
+  elements or keys instead of none: `{0, 1}`, `{"": 0}`.
 - When the search runs out of readable strings, the error keeps its usual details,
   such as the unsupported logic and the last rejection.
 - A validator that reads a parameter such as `self`, `info` or `cls` as a bare
