@@ -140,9 +140,10 @@ filler.explain()  # fresh JSON-friendly dictionary
   input aliases. Configuration lives on `ModelFiller`; fields named `mode`,
   `model`, `count`, or `self` work.
 - Fields modelfill solves take exact Python `int`, `bool`, `str`, `date`, naive
-  `datetime`, `timedelta`, Enum members, allowed Literal values, or `None` for
-  optional fields. There is no coercion: `"10"` or `True` for an `int` field, or an
-  aware datetime, raises `TypeError`. Unknown field names raise `ValueError`.
+  `datetime` and `time`, `timedelta`, a `Decimal` within its `decimal_places`, Enum
+  members, allowed Literal values, or `None` for optional fields. There is no
+  coercion: `"10"` or `True` for an `int` field, `Decimal("1.234")` for two places,
+  or an aware datetime, raises `TypeError`. Unknown field names raise `ValueError`.
 - Fields of any other type (UUIDs, floats, lists, nested models, …) are
   **external**: the solver does not model them. Your value goes to the
   constructor, which may convert it as usual (`5` to `5.0`); without one, such a
@@ -177,8 +178,8 @@ filler.explain()  # fresh JSON-friendly dictionary
 | --- | --- |
 | Pydantic | v2 `BaseModel` and `RootModel`, inherited validators, scalar fields |
 | Dataclasses | Standard dataclasses, including frozen and slotted classes; pure `__post_init__`, when the generated `__init__` calls it (a subclass that is not decorated again never runs its own) |
-| Types | Exact `int`, `bool`, `str`, `date`, naive `datetime`, naive `time`, `timedelta`; ordinary `Enum`, `IntEnum`, `StrEnum`; homogeneous `Literal` subsets; any of these `\| None` (`Optional`, or `None` inside a `Literal`), also behind a `NewType`, a `type` alias or an `Annotated` inside the `Optional`, whose constraints apply; other types as [external fields](#fields-the-solver-does-not-model) |
-| Numeric metadata | Integer, date, datetime and timedelta `Field(gt, ge, lt, le)`, respecting strict and inclusive bounds; integer `Field(multiple_of)`; on optional fields they constrain non-None values, as in Pydantic |
+| Types | Exact `int`, `bool`, `str`, `date`, naive `datetime`, naive `time`, `timedelta`; `Decimal` with `decimal_places`; ordinary `Enum`, `IntEnum`, `StrEnum`; homogeneous `Literal` subsets; any of these `\| None` (`Optional`, or `None` inside a `Literal`), also behind a `NewType`, a `type` alias or an `Annotated` inside the `Optional`, whose constraints apply; other types as [external fields](#fields-the-solver-does-not-model) |
+| Numeric metadata | Integer, decimal, date, datetime and timedelta `Field(gt, ge, lt, le)`, respecting strict and inclusive bounds; integer and decimal `Field(multiple_of)`; a decimal's `max_digits` and `decimal_places`, exactly as Pydantic counts them; on optional fields they constrain non-None values, as in Pydantic |
 | String metadata | `Field(min_length, max_length)` and global `str_min_length` / `str_max_length`; a [`pattern`](#string-patterns), with either regex engine |
 | Model validators | Instance `@model_validator(mode="after")`, returning the original `self` on successful paths |
 | Field validators | `@field_validator(mode="after")`, and `Annotated[..., AfterValidator(f)]` with a named function `f`, returning the original value, including literal `info.data["earlier_field"]` reads |
@@ -327,6 +328,7 @@ never depends on call order, earlier calls, the thread or machine speed.
 | Field | Canonical value |
 | --- | --- |
 | `int` | nearest `0` |
+| `Decimal` with `decimal_places` | nearest `0`, with the field's places: `0.00` |
 | `timedelta` | nearest `timedelta(0)` |
 | naive `time` | nearest midnight |
 | `date` | nearest 2025-01-01 |
@@ -443,7 +445,7 @@ assert (filler.fill().id, filler.fill().customer.id) == (UUID(int=7), UUID(int=9
 | `X \| None`, `Any` | `None` |
 | `list`, `tuple[X, ...]`, `set`, `dict` | empty; a list or tuple with `min_length` repeats its element's boring value, and a set or dict gets distinct elements or keys: that value, then the next ones (`0`, `1`, … or `""`, `"1"`, …) |
 | `tuple[int, str]` | each element's boring value: `(0, "")` |
-| `float`, `Decimal` | `0`, or the whole number nearest 0 that the bounds allow (`gt=0` gives `1.0`) |
+| `float`, `Decimal` without `decimal_places` | `0`, or the whole number nearest 0 that the bounds allow (`gt=0` gives `1.0`) |
 | `int \| str` and other unions | the first member's boring value |
 | `UUID`, `UUID4`, … | `00000000-0000-4000-8000-000000000000`, with the version bits the annotation asks for |
 | `bytes`, `time`, `AwareDatetime` | `b""`, `time(0, 0)`, 2025-01-01 00:00 UTC |

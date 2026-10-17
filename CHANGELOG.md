@@ -5,9 +5,18 @@
 ### Breaking changes
 
 - `explain()` no longer reports `selection`, which was always `"canonical"`.
+- A `Decimal` field with `decimal_places` is solved now, so providers no longer
+  fill it: a provider path to one fails when the filler is created, and a
+  `Decimal` provider passes it by. Fix such a field per fill instead.
 
 ### Added
 
+- `Decimal` fields with `decimal_places` are solved exactly, as whole numbers of
+  their last place: bounds, `multiple_of` and `max_digits` hold as Pydantic checks
+  them, a float bound reads as Pydantic reads it (`ge=0.1` allows `0.1`), and the
+  canonical value is nearest 0 with the field's places, such as `0.50`. Rules may
+  test such decimals for equality, with integers too. A Decimal used to be an
+  external field, whose boring value often broke its places.
 - Lists, tuples and dicts of models, and unions of models, are filled instead of
   getting no value: each element is the model's canonical completion, made anew,
   as many as `min_length` asks, and a union gets its first member that fills, so a

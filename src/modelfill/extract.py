@@ -524,6 +524,8 @@ class _Analyzer:
             enum_type = self.enum_type(yes)
             assert enum_type is not None
             sort = Domain("enum", tuple(enum_type))
+        elif yes.sort.kind == "decimal":  # On the finer grid of the two.
+            sort = Domain("decimal", scale=max(yes.sort.scale, no.sort.scale))
         else:
             sort = Domain(yes.sort.kind)
         return node("ite", condition, yes, no, sort=sort)
@@ -657,7 +659,7 @@ class _Analyzer:
                     syntax, "Enum comparisons require equality with the same Enum type"
                 )
             values_equal = node("eq", left, right)
-        elif len(kinds) == 1 or kinds <= {"int", "bool"}:
+        elif len(kinds) == 1 or kinds <= {"int", "bool", "decimal"}:  # Numbers by value.
             values_equal = node("eq", left, right)
         else:
             values_equal = const(False)  # Python's == across these types is always False.

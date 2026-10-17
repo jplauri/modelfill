@@ -8,6 +8,7 @@ import itertools
 import linecache
 import random
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Annotated
 
@@ -117,6 +118,42 @@ def test_metadata_combines_as_in_pydantic(data):
             filler.fill(value=value)
     else:
         assert filler.fill(value=value) == expected
+
+
+NUMBERS = st.one_of(  # Bounds as Pydantic takes them: a float reads as its repr.
+    st.integers(-5, 5), st.decimals(-5, 5, places=3), st.floats(-5, 5).map(lambda x: round(x, 2))
+)
+
+
+@given(st.data())
+def test_decimal_constraints_match_pydantic(data):
+    digits = data.draw(st.none() | st.integers(1, 4))
+    places = data.draw(st.integers(0, 3))
+    steps = st.sampled_from([Decimal("0.05"), Decimal("0.3"), Decimal("1.5"), 0.1, 2])
+    items = data.draw(
+        st.lists(
+            st.one_of(*(NUMBERS.map(kind) for kind in (Ge, Gt, Le, Lt)), steps.map(MultipleOf)),
+            min_size=1,
+            max_size=3,
+        )
+    )
+    bounds = data.draw(st.dictionaries(st.sampled_from(["ge", "gt", "le", "lt"]), NUMBERS))
+    field = Field(max_digits=digits, decimal_places=places, **bounds)
+    model = create_model("Priced", value=(Annotated[Decimal, *items], field))
+    grid = places if digits is None else min(places, digits)  # Every value Pydantic takes.
+    value = data.draw(st.decimals(-12, 12, places=grid))
+    filler = ModelFiller(model, mode="strict")
+    try:
+        expected = model(value=value)
+    except ValidationError:
+        with pytest.raises(UnsatisfiableConstraints):
+            filler.fill(value=value)
+    else:
+        assert filler.fill(value=value) == expected
+    try:  # The canonical value, when there is one, is valid: fill() validates it.
+        filler.fill()
+    except UnsatisfiableConstraints:
+        pass
 
 
 @given(st.dictionaries(st.sampled_from(["start", "end", "duration"]), st.integers(-1, 20)))

@@ -6,10 +6,14 @@ import operator
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from enum import Enum, EnumType, Flag, IntEnum, ReprEnum, StrEnum
+from fractions import Fraction
 from typing import Any, Literal
 
-Kind = Literal["int", "bool", "str", "enum", "none", "date", "datetime", "time", "timedelta"]
+Kind = Literal[
+    "int", "bool", "str", "enum", "none", "date", "datetime", "time", "timedelta", "decimal"
+]
 
 
 @dataclass(frozen=True)
@@ -17,12 +21,22 @@ class Domain:
     kind: Kind
     choices: tuple[Any, ...] | None = None
     nullable: bool = False  # Also accepts None, which the solver tracks as a flag.
+    # A decimal's values are whole numbers of 10**-scale, with at most digits digits
+    # when that is set, as max_digits sets it.
+    scale: int = 0
+    digits: int | None = None
 
     def accepts(self, value: Any) -> bool:
         if value is None:
             return self.nullable
         if self.kind == "enum":
             return self.choices is not None and any(value is x for x in self.choices)
+        if self.kind == "decimal":  # Finite, on the grid; trailing zeros do not matter.
+            return (
+                type(value) is Decimal
+                and value.is_finite()
+                and (Fraction(value) * 10**self.scale).denominator == 1
+            )
         primitive = PRIMITIVES.get(type(value))
         return (
             primitive is not None
@@ -46,11 +60,14 @@ PRIMITIVES = {int: INT, bool: BOOL, str: STR} | {t: Domain(k) for k, t in TIME_T
 
 # Dates count days; naive datetimes and timedeltas count microseconds, and naive
 # times those since midnight. All preserve order and turn Python's date
-# arithmetic into integer arithmetic; times have none.
+# arithmetic into integer arithmetic; times have none. A decimal counts units of
+# its scale: 12.34 is 1234 hundredths.
 DAY = timedelta(days=1) // timedelta(microseconds=1)
 
 
-def encode(value: int | date | datetime | time | timedelta) -> int:
+def encode(value: int | date | datetime | time | timedelta | Decimal, scale: int = 0) -> int:
+    if isinstance(value, Decimal):  # On its grid, so exact, beyond any precision too.
+        return int(Fraction(value) * 10**scale)
     if isinstance(value, timedelta):
         return value // timedelta(microseconds=1)
     if isinstance(value, datetime):  # Before date: every datetime is also a date.
@@ -62,9 +79,13 @@ def encode(value: int | date | datetime | time | timedelta) -> int:
     return value
 
 
-def decode(kind: str, number: int) -> int | date | datetime | time | timedelta:
+def decode(
+    kind: str, number: int, scale: int = 0
+) -> int | date | datetime | time | timedelta | Decimal:
     if kind == "int":
         return number
+    if kind == "decimal":
+        return Decimal(f"{number}e{-scale}")  # Exact, with scale places: 1.50.
     if kind == "timedelta":
         return timedelta(microseconds=number)
     if kind == "datetime":
@@ -129,6 +150,8 @@ def var(name: str, domain: Domain) -> Expr:
 def const(value: Any) -> Expr:
     if isinstance(value, Enum):
         domain = Domain("enum", tuple(type(value)))
+    elif isinstance(value, Decimal):  # On its own grid: Decimal("1.50") counts hundredths.
+        domain = Domain("decimal", scale=max(0, -int(value.as_tuple().exponent)))
     else:
         domain = NONE if value is None else PRIMITIVES[type(value)]
     return Expr("const", domain, value=value)
