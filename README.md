@@ -243,18 +243,19 @@ Field types the solver does not model (floats, containers, nested models, UUIDs,
 aware datetimes, other unions, mixed-type Literals, Flags, custom Enum behavior,
 …) become external fields, described above. Unsupported **constructor shapes**
 fail explicitly: Pydantic dataclasses, dataclass `InitVar` / `init=False`
-fields, and complex or duplicate aliases.
+fields, duplicate aliases, and alias paths through a list that Pydantic cannot
+replace with the field name.
 
 Validator code outside the [language above](#exact-recognized-validator-language)
-is unsupported **validation logic**, for example loops, calls and string methods,
-`try`, `with` and `match`, mutation, other exception classes and transformed
-return values. So are async, generator and wrapped validators, validators
-without retrievable source, and these Pydantic features: `before`, `plain` or
-`wrap` validators; legacy validators; Annotated validation callbacks; other
-field metadata, such as `StringConstraints(to_lower=True)`; transforming model
-config; custom initialization, core schema, attribute hooks and a custom
-`model_post_init` (private attributes are fine); and data-dependent default
-factories.
+is unsupported **validation logic**, for example loops, other calls and string
+methods, `try`, `with` and `match`, mutation, other exception classes and
+transformed return values. So are async, generator and wrapped validators,
+validators without retrievable source, and these Pydantic features: `before`,
+`plain` or `wrap` validators; legacy validators; Annotated callbacks other than
+a pure `AfterValidator`; other field metadata, such as
+`StringConstraints(to_lower=True)`; transforming model config; custom
+initialization, core schema, attribute hooks and a custom `model_post_init`
+(private attributes are fine); and data-dependent default factories.
 
 In **strict** mode, unsupported validation logic raises `UnsupportedConstraint`
 when the filler is created. In **auto** mode it appears in
