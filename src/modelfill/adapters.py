@@ -14,7 +14,18 @@ import types
 from collections.abc import Callable, Iterable
 from copy import deepcopy
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Literal,
+    NewType,
+    TypeAliasType,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from annotated_types import (
     Ge,
@@ -40,6 +51,7 @@ from pydantic import (
     ValidationError,
     WrapSerializer,
 )
+from pydantic.fields import FieldInfo
 from pydantic.types import PathType, Strict, UuidVersion
 from pydantic_core import PydanticUndefined
 
@@ -196,6 +208,22 @@ def _flatten(metadata: Iterable[Any]) -> list[Any]:
         elif item is not None:
             items.append(item)
     return items
+
+
+def _resolve(annotation: Any) -> tuple[Any, list[Any]]:
+    """A type without its NewType, type alias and Annotated layers, and the metadata they
+    carry, innermost first, as Pydantic merges it ahead of a field's own."""
+    if isinstance(annotation, NewType):
+        return _resolve(annotation.__supertype__)
+    if isinstance(annotation, TypeAliasType):
+        return _resolve(annotation.__value__)
+    if get_origin(annotation) is Annotated:
+        base, *outer = get_args(annotation)
+        inner, metadata = _resolve(base)
+        for item in outer:  # A Field() in Annotated carries its constraints as metadata.
+            metadata += item.metadata if isinstance(item, FieldInfo) else [item]
+        return inner, metadata
+    return annotation, []
 
 
 def _pattern(item: Any) -> Any:
@@ -377,7 +405,8 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         else True
     )
     for index, (name, info) in enumerate(model.model_fields.items()):
-        domain = _domain(info.annotation)
+        annotation, inherited = _resolve(info.annotation)
+        domain = _domain(annotation)
         alias = info.validation_alias
         if alias is not None and not isinstance(alias, str):
             raise UnsupportedConstraint(
@@ -398,7 +427,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         pattern = None
         # Unpacked before anything reads it, so a group's own length limits override
         # the global ones, as in Pydantic.
-        metadata = _flatten(info.metadata)
+        metadata = _flatten([*inherited, *info.metadata])
         # An AfterValidator gets the field's validated value, as a field validator does,
         # so it is analyzed as one: a pure check is modeled, anything else unsupported.
         # Unlike a constraint of one kind, every one of them runs.
@@ -495,7 +524,7 @@ def _dataclass(model: type[DataclassInstance]) -> Adapter:
         if not info.init:
             raise UnsupportedConstraint(f"Dataclass init=False field {info.name!r} is unsupported")
         annotation = annotations[info.name]
-        domain = _domain(annotation)
+        domain = _domain(_resolve(annotation)[0])  # Dataclasses do not enforce metadata.
         factory = None if info.default_factory is MISSING else info.default_factory
         required = info.default is MISSING and factory is None
         fields.append(

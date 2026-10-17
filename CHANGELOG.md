@@ -26,6 +26,10 @@
 
 ### Fixed
 
+- A `NewType` field and a PEP 695 `type` alias are read through to the type they
+  wrap, with the constraints they carry, as Pydantic reads them: a
+  `NewType("UserId", int)` field is solved, and `type Adult = Annotated[int,
+  Ge(18)]` gives 18. Such fields used to get no value at all.
 - When the search runs out of readable strings, the error keeps its usual details,
   such as the unsupported logic and the last rejection.
 - A validator that reads a parameter such as `self`, `info` or `cls` as a bare

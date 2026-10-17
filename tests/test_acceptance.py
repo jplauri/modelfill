@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from itertools import product
-from typing import Annotated, ClassVar, Literal, get_args
+from typing import Annotated, ClassVar, Literal, NewType, get_args
 from uuid import UUID, uuid4
 
 import pytest
@@ -342,6 +342,28 @@ class FieldDependency(BaseModel):
         if value <= info.data["lower"]:
             raise ValueError("upper must exceed lower")
         return value
+
+
+UserId = NewType("UserId", int)
+Token = NewType("Token", UUID)
+Small = NewType("Small", Annotated[int, Le(5)])
+type Adult = Annotated[int, Ge(18)]
+type Labels = list[str]
+
+
+class Member(BaseModel):
+    id: UserId
+    token: Token
+    small: Small = Field(ge=3)  # Pydantic merges Le(5) from the NewType with ge=3.
+    age: Adult
+    labels: Labels
+
+
+def test_new_types_and_type_aliases_are_read_through():
+    # These once had no value at all, solved or boring.
+    member = ModelFiller(Member, mode="strict").fill()
+    assert (member.id, member.small, member.age, member.labels) == (0, 3, 18, [])
+    assert member.token == UUID("00000000-0000-4000-8000-000000000000")
 
 
 def test_field_validator_earlier_field_reads():

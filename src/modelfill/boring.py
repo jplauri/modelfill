@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated, Any, Literal, Union, get_args, get_origin
+from typing import Any, Literal, Union, get_args, get_origin
 
 from annotated_types import Ge, Gt, Le, Lt, MinLen, MultipleOf
 from pydantic import (
@@ -28,7 +28,7 @@ from pydantic import (
 )
 from pydantic.types import UuidVersion
 
-from .adapters import _flatten
+from .adapters import _flatten, _resolve
 
 MISSING = dataclasses.MISSING
 _START = datetime(2025, 1, 1)  # The anchor that canonical dates and times use, too.
@@ -74,9 +74,9 @@ def nested_model(annotation: Any) -> type | None:
 
 def boring(annotation: Any, metadata: Sequence[Any] = ()) -> Any:
     """A fixed, readable value of a type the solver does not model, or MISSING."""
+    annotation, inherited = _resolve(annotation)  # NewType, type alias and Annotated layers.
+    metadata = (*inherited, *metadata)
     origin, args = get_origin(annotation), get_args(annotation)
-    if origin is Annotated:
-        return boring(args[0], (*args[1:], *metadata))
     if annotation in (Any, object):
         return None
     if origin in (Union, types.UnionType):
