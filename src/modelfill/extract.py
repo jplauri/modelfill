@@ -543,6 +543,18 @@ class _Analyzer:
                 and not syntax.keywords
             ):
                 return self.affix(method.attr, method.value, syntax.args[0], syntax)
+            if (
+                isinstance(method, ast.Attribute)
+                and method.attr in ("weekday", "isoweekday")
+                and not syntax.args
+                and not syntax.keywords
+            ):
+                day = self.present(self.expression(method.value))  # None has no weekday.
+                if day.sort.kind in ("date", "datetime"):
+                    weekday = node("weekday", day, sort=INT)  # Monday is 0, and 1 in ISO.
+                    if method.attr == "isoweekday":
+                        return node("add", weekday, const(1), sort=INT)
+                    return weekday
             function = self.callee(syntax.func)
             if function is len and len(syntax.args) == 1 and not syntax.keywords:
                 operand = self.present(self.expression(syntax.args[0]))

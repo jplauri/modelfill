@@ -258,6 +258,12 @@ def substrings(self):
     return self
 
 
+def weekdays(self):
+    if self.a.weekday() >= 5 or self.b.isoweekday() == self.a.isoweekday():
+        raise ValueError("invalid")
+    return self
+
+
 def boolean_numbers(self):
     if self.a == self.b and self.a + self.b > 1:
         raise ValueError("invalid")
@@ -337,6 +343,16 @@ PRICE_GRID = {  # Hundredths and tenths, compared by value.
 MAYBE = {"a": Domain("int", nullable=True), "b": INT}
 MAYBE_GRID = {"a": [None, *range(-2, 5)], "b": range(-2, 5)}
 DAYS = [date(2025, 1, 1) + timedelta(days=offset) for offset in range(4)]
+WEEK = {  # A week of dates, and instants around midnights, Python's first and last too.
+    "a": [date.min, date.max, *(date(2025, 1, 1) + timedelta(days=n) for n in range(8))],
+    "b": [
+        datetime.min,
+        datetime.max,
+        *(datetime(2025, 1, 4) + timedelta(microseconds=n) for n in (-1, 0, 1)),
+        datetime(2025, 1, 5, 23, 59, 59, 999999),
+        datetime(2025, 1, 6),
+    ],
+}
 SCHEDULE = {"start": Domain("datetime"), "length": Domain("timedelta")}
 SCHEDULE_GRID = {
     "start": [datetime(2025, 1, 1, hour) for hour in (9, 10, 11)],
@@ -361,6 +377,7 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
         (date_rules, {"a": Domain("date"), "b": Domain("date")}, {"a": DAYS, "b": DAYS}),
         (module_constants, {"a": Domain("date"), "b": Domain("date")}, {"a": DAYS, "b": DAYS}),
         (schedule_rules, SCHEDULE, SCHEDULE_GRID),
+        (weekdays, {"a": Domain("date"), "b": Domain("datetime")}, WEEK),
         (decimal_comparisons, PRICES, PRICE_GRID),
         (decimal_arithmetic, LEDGER, PRICE_GRID),
         (boolean_numbers, {"a": BOOL, "b": INT}, {"a": (False, True), "b": range(-1, 3)}),

@@ -175,6 +175,7 @@ _FUNCTIONS = {
     "len": len,
     "startswith": str.startswith,
     "endswith": str.endswith,
+    "weekday": date.weekday,  # A datetime's too.
 }
 
 

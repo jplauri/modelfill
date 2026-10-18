@@ -556,6 +556,27 @@ def test_rules_may_look_for_substrings():
         fill(Contact, handle="two words")
 
 
+class Appointment(BaseModel):
+    day: date
+    call: datetime
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.day.weekday() < 5 or self.call.isoweekday() != 1:
+            raise ValueError("appointments fall on weekends, and calls on Mondays")
+        return self
+
+
+def test_rules_may_read_weekdays():
+    # weekday() was unsupported, so strict mode refused this. The call is the instant
+    # nearest the anchor, at the end of the Monday before.
+    appointment = ModelFiller(Appointment, mode="strict").fill()
+    assert appointment.day == date(2025, 1, 4)  # Ties the Sunday before; a tie goes later.
+    assert appointment.call == datetime(2024, 12, 30, 23, 59, 59, 999999)
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Appointment, day=date(2025, 1, 6))  # A Monday.
+
+
 class Limited(BaseModel):
     LIMIT: ClassVar[int] = 7
     n: int

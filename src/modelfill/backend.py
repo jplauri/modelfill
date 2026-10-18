@@ -55,6 +55,11 @@ def _strings(exprs: Iterable[Expr]) -> Generator[str]:
         yield from _strings(expr.args)
 
 
+def _day(term: Any, sort: Domain) -> Any:
+    """A date's or datetime's day number, as toordinal() gives it: 0001-01-01 is 1."""
+    return term if sort.kind == "date" else term / DAY + 1
+
+
 def _affixes(exprs: Iterable[Expr]) -> Generator[tuple[str, str]]:
     """(field, string) for each string a rule tests a field to start with, end with
     or contain, in rule order."""
@@ -203,6 +208,8 @@ class Solver:
             return z3.If(*args)
         if op == "len":
             return z3.Length(args[0])
+        if op == "weekday":  # Day 1 was a Monday.
+            return (_day(args[0], expr.args[0].sort) + 6) % 7
         if op == "startswith":
             return z3.PrefixOf(args[1], args[0])
         if op == "endswith":
