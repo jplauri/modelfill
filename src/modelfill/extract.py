@@ -423,6 +423,10 @@ class _Analyzer:
                     member = None
                 if member is not None and member.sort.kind == "enum" and member.sort.choices:
                     return self.member_attribute(member, syntax.attr, syntax)
+            if syntax.attr == "year":
+                day = self.present(self.expression(syntax.value))  # None has no year.
+                if day.sort.kind in ("date", "datetime"):
+                    return node("year", day, sort=INT)
             raise self.unsupported(
                 syntax, "only model fields and literal Enum members are supported attributes"
             )

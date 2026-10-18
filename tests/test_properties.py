@@ -22,7 +22,7 @@ from examples.meeting import Meeting
 from modelfill import ModelFiller, UnsatisfiableConstraints, UnsupportedConstraint, fill
 from modelfill.backend import Solver
 from modelfill.extract import extract_validator
-from modelfill.ir import INT, decode, encode
+from modelfill.ir import INT, Domain, decode, encode, node, var
 from modelfill.patterns import Pattern
 
 # Z3 strings cover U+0000 to U+2FFFF; surrogates are not text.
@@ -83,6 +83,20 @@ def test_the_sampler_decodes_solver_strings_exactly(text, seed):
 
 SMALL = st.integers(-8, 8)
 LENGTHS = st.integers(0, 6)
+
+
+@given(st.one_of(st.dates(), st.datetimes()))
+def test_solver_years_and_weekdays_match_python(value):
+    domain = Domain("datetime" if isinstance(value, datetime) else "date")
+    solver = Solver({"d": domain}, (), timeout_ms=1000, work_limit=10**6)
+    year, weekday = (
+        solver.translate(node(op, var("d", domain), sort=INT)) for op in ("year", "weekday")
+    )
+    with solver.session({"d": value}):  # Each is pinned to Python's own.
+        assert not solver.fits(year != value.year)
+        assert not solver.fits(weekday != value.weekday())
+
+
 METADATA = {  # Annotated items, Field() arguments and values to try, per base type.
     int: (
         st.one_of(

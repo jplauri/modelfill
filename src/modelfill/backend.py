@@ -60,6 +60,20 @@ def _day(term: Any, sort: Domain) -> Any:
     return term if sort.kind == "date" else term / DAY + 1
 
 
+def _year(day: Any) -> Any:
+    """The year of a day number, as datetime finds it: whole cycles of 400, 100, 4 and
+    1 years, each a fixed number of days, where a cycle's closing leap day still
+    belongs to the year before. Each rest is a subtraction: Z3 takes it far faster
+    than a remainder."""
+    rest, cycles = day - 1, []
+    for length in (146097, 36524, 1461, 365):
+        cycles.append(rest / length)
+        rest = rest - length * cycles[-1]
+    n400, n100, n4, n1 = cycles
+    year = n400 * 400 + n100 * 100 + n4 * 4 + n1 + 1
+    return z3.If(z3.Or(n100 == 4, n1 == 4), year - 1, year)
+
+
 def _affixes(exprs: Iterable[Expr]) -> Generator[tuple[str, str]]:
     """(field, string) for each string a rule tests a field to start with, end with
     or contain, in rule order."""
@@ -210,6 +224,8 @@ class Solver:
             return z3.Length(args[0])
         if op == "weekday":  # Day 1 was a Monday.
             return (_day(args[0], expr.args[0].sort) + 6) % 7
+        if op == "year":
+            return _year(_day(args[0], expr.args[0].sort))
         if op == "startswith":
             return z3.PrefixOf(args[1], args[0])
         if op == "endswith":

@@ -264,6 +264,14 @@ def weekdays(self):
     return self
 
 
+def years(self):
+    if self.a.year != self.b.year - 1 and self.a.year % 4 != 0:
+        raise ValueError("invalid")
+    if self.b.year > 2100 or self.a.year == self.b.year:
+        raise ValueError("invalid")
+    return self
+
+
 def boolean_numbers(self):
     if self.a == self.b and self.a + self.b > 1:
         raise ValueError("invalid")
@@ -343,6 +351,30 @@ PRICE_GRID = {  # Hundredths and tenths, compared by value.
 MAYBE = {"a": Domain("int", nullable=True), "b": INT}
 MAYBE_GRID = {"a": [None, *range(-2, 5)], "b": range(-2, 5)}
 DAYS = [date(2025, 1, 1) + timedelta(days=offset) for offset in range(4)]
+YEARS = {  # Each side of New Year, a leap day closing a 4- and a 400-year cycle too.
+    "a": [
+        date.min,
+        date(1, 12, 31),
+        date(1900, 12, 31),
+        date(1999, 12, 31),
+        date(2000, 1, 1),
+        date(2000, 12, 31),
+        date(2001, 1, 1),
+        date(2004, 12, 31),
+        date(2005, 1, 1),
+        date.max,
+    ],
+    "b": [
+        datetime.min,
+        datetime(1999, 12, 31, 23, 59, 59, 999999),
+        datetime(2000, 1, 1),
+        datetime(2000, 12, 31, 12),
+        datetime(2004, 12, 31, 23, 59, 59, 999999),
+        datetime(2100, 12, 31, 23),
+        datetime(2101, 1, 1),
+        datetime.max,
+    ],
+}
 WEEK = {  # A week of dates, and instants around midnights, Python's first and last too.
     "a": [date.min, date.max, *(date(2025, 1, 1) + timedelta(days=n) for n in range(8))],
     "b": [
@@ -378,6 +410,7 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
         (module_constants, {"a": Domain("date"), "b": Domain("date")}, {"a": DAYS, "b": DAYS}),
         (schedule_rules, SCHEDULE, SCHEDULE_GRID),
         (weekdays, {"a": Domain("date"), "b": Domain("datetime")}, WEEK),
+        (years, {"a": Domain("date"), "b": Domain("datetime")}, YEARS),
         (decimal_comparisons, PRICES, PRICE_GRID),
         (decimal_arithmetic, LEDGER, PRICE_GRID),
         (boolean_numbers, {"a": BOOL, "b": INT}, {"a": (False, True), "b": range(-1, 3)}),

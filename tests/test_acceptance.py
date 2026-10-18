@@ -577,6 +577,25 @@ def test_rules_may_read_weekdays():
         fill(Appointment, day=date(2025, 1, 6))  # A Monday.
 
 
+class Licence(BaseModel):
+    issued: date
+    expires: date
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.issued.year < 2030 or self.expires.year != self.issued.year + 10:
+            raise ValueError("licences from 2030 on run ten calendar years")
+        return self
+
+
+def test_rules_may_read_years():
+    # .year was unsupported, so strict mode refused this.
+    licence = ModelFiller(Licence, mode="strict").fill()
+    assert (licence.issued, licence.expires) == (date(2030, 1, 1), date(2040, 1, 1))
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Licence, issued=date(2031, 6, 1), expires=date(2040, 12, 31))
+
+
 class Limited(BaseModel):
     LIMIT: ClassVar[int] = 7
     n: int
