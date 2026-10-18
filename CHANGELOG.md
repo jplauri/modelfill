@@ -11,6 +11,9 @@
 
 ### Added
 
+- Validators may read the `.year` of a date or datetime, and call `.weekday()`
+  and `.isoweekday()` on one, as in `self.issued.year >= 2030` or
+  `self.day.weekday() < 5`. Z3 reads each exactly off the day number.
 - Validators may call `startswith()` and `endswith()` on a string, with a string
   or a literal tuple of them, as in `self.url.startswith(("http://", "https://"))`,
   and test for a substring with `in`, as in `"@" in self.email`. A canonical
