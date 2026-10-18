@@ -778,14 +778,13 @@ class _Analyzer:
         sort = PRIMITIVES.get(type(items[0]))
         if sort is None or any(type(item) is not type(items[0]) for item in items):
             raise self.unsupported(syntax, f"Enum {attribute}s must share one supported type")
-        if not all(encodable(item) for item in items):
-            raise self.unsupported(syntax, "string constants above U+2FFFF are unsupported")
+        values = [self.constant(item, syntax) for item in items]  # No aware datetimes, say.
         if member.op == "const":
             return const(getattr(member.value, attribute))
         member = self.present(member)  # None has neither: Python raises AttributeError.
-        result = const(items[-1])
-        for choice, item in zip(choices[-2::-1], items[-2::-1], strict=True):
-            result = node("ite", node("eq", member, const(choice)), const(item), result, sort=sort)
+        result = values[-1]
+        for choice, value in zip(choices[-2::-1], values[-2::-1], strict=True):
+            result = node("ite", node("eq", member, const(choice)), value, result, sort=sort)
         return result
 
     def field_path(self, syntax: ast.expr) -> str:

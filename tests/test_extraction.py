@@ -937,3 +937,20 @@ def test_external_enum_constants_cannot_run_custom_semantics():
 
     with pytest.raises(UnsupportedConstraint, match="standard semantics"):
         extract_validator(validator, {})
+
+
+class Launch(Enum):
+    FIRST = dt.datetime(2025, 1, 1, tzinfo=dt.UTC)
+    SECOND = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
+
+
+def launched_lately(self):
+    if self.a.value.year < 2026:
+        raise ValueError("invalid")
+    return self
+
+
+def test_enum_values_are_read_as_constants_are():
+    # An aware datetime value was taken, and failed only when the solver encoded it.
+    with pytest.raises(UnsupportedConstraint, match="aware datetime constants"):
+        extract_validator(launched_lately, {"a": Domain("enum", tuple(Launch))})

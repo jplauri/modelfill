@@ -26,6 +26,9 @@
 - A `RootModel` whose `root` has an alias, its own or from an `alias_generator`,
   fills. The value went in under the alias, as a dict that RootModel took for the
   root.
+- An Enum member's `.value` or `.name` is checked as any constant is, so a rule
+  reading the value of an Enum of aware datetimes is unsupported instead of
+  raising `TypeError` when filling.
 
 ## 0.4.0
 
