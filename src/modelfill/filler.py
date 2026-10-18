@@ -64,6 +64,12 @@ class _Rejected(Exception):
     returned; anything else raised during construction is an error and propagates."""
 
 
+def _model(field: FieldSpec) -> type | None:
+    """The model a field holds, through NewTypes and type aliases, but not M | None."""
+    annotation = _resolve(field.annotation)[0]
+    return annotation if nested_model(annotation) is annotation else None
+
+
 def _relabel(label: str, prefix: str) -> str:
     """Field constraint labels start with the field, or len(field): prefix that field."""
     return f"len({prefix}{label[4:]}" if label.startswith("len(") else prefix + label
@@ -108,8 +114,8 @@ def _compile_fields(model: type, adapter: Adapter, stack: list[type]) -> _Compil
                 unchecked.append(field.name)
             continue
         # Only a required nested model joins this solver; others are completed alone.
-        inner = nested_model(field.annotation)
-        if inner is not field.annotation or not field.required or inner in stack:
+        inner = _model(field)
+        if inner is None or not field.required or inner in stack:
             continue
         try:
             sub = _compile(inner)
@@ -621,7 +627,7 @@ class ModelFiller[T]:
                 inputs.update(known)
                 fresh.update(made)
                 continue
-            nested = nested_model(field.annotation)
+            nested = _model(field)
             if given is not MISSING:
                 # A dict that stands for a model, at any depth, is completed.
                 if isinstance(given, (dict, list, tuple)) and models_in(field.annotation):
@@ -639,7 +645,7 @@ class ModelFiller[T]:
                 if field.default_factory is None or issubclass(self.model, BaseModel):
                     continue  # The model's own default applies.
                 make = field.default_factory
-            elif nested is not None and nested is field.annotation:
+            elif nested is not None:
                 make = partial(self._fill_nested, name, nested, {})
             elif boring(field.annotation, field.metadata) is not MISSING:
                 make = partial(boring, field.annotation, field.metadata)
@@ -668,7 +674,7 @@ class ModelFiller[T]:
                 source = "provider"
             elif not field.required:
                 source = "model default"
-            elif nested_model(field.annotation) is field.annotation:
+            elif _model(field) is not None:
                 source = "nested model"
             elif boring(field.annotation, field.metadata) is not MISSING:
                 source = "boring value"

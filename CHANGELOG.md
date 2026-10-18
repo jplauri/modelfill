@@ -20,6 +20,9 @@
   `Child | list[Child]` completes `[{}]`, and `list[Child] | Child` completes `{}`.
   The first member with models took any value, and left one of another shape as it
   was; a fixed-length tuple member read a dict's keys as its items.
+- A required nested model behind a `type` alias or a `NewType`, as in `child:
+  ChildAlias`, is solved with its parent, like one annotated directly. It was
+  completed on its own, so a parent's rule that read it was unsupported.
 
 ## 0.4.0
 

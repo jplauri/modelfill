@@ -15,9 +15,10 @@ search that never claims impossibility.
   decorated again never runs its own). A dataclass gains no Pydantic validation:
   modelfill enforces only the solved field types, and `Annotated` metadata on a
   dataclass field is not a rule unless the dataclass's own code enforces it.
-- Required nested models, Pydantic or dataclass, are solved with their parent, so
-  its rules may read `self.customer.age`, and a dict fixes some of the nested
-  fields. Optional nested models and those with defaults are completed on their own.
+- Required nested models, Pydantic or dataclass, also behind a `NewType` or a
+  `type` alias, are solved with their parent, so its rules may read
+  `self.customer.age`, and a dict fixes some of the nested fields. Optional nested
+  models and those with defaults are completed on their own.
 - These constructor shapes fail explicitly: Pydantic dataclasses, dataclass
   `InitVar` and `init=False` fields, duplicate aliases, and alias paths through a
   list that Pydantic cannot replace with the field name.
