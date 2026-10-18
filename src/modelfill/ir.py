@@ -176,6 +176,8 @@ _FUNCTIONS = {
     "startswith": str.startswith,
     "endswith": str.endswith,
     "weekday": date.weekday,  # A datetime's too.
+    "date": operator.methodcaller("date"),  # A datetime's day and time of day.
+    "time": operator.methodcaller("time"),
 } | {  # Integer attributes of dates, times and timedeltas.
     name: operator.attrgetter(name)
     for name in (

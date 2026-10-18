@@ -239,6 +239,10 @@ class Solver:
             return (_day(args[0], expr.args[0].sort) + 6) % 7
         if op == "year":
             return _year(_day(args[0], expr.args[0].sort))
+        if op == "date":  # A datetime's day.
+            return _day(args[0], expr.args[0].sort)
+        if op == "time":  # A datetime's time of day.
+            return args[0] - DAY * (args[0] / DAY)
         if op in _CLOCK:  # Floor division and a remainder, which agree with Python's.
             unit, modulus = _CLOCK[op]
             count = args[0] / unit if unit > 1 else args[0]

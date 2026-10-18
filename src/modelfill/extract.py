@@ -557,13 +557,18 @@ class _Analyzer:
                 return self.affix(method.attr, method.value, syntax.args[0], syntax)
             if (
                 isinstance(method, ast.Attribute)
-                and method.attr in ("weekday", "isoweekday")
+                and method.attr in ("weekday", "isoweekday", "date", "time")
                 and not syntax.args
                 and not syntax.keywords
             ):
-                day = self.present(self.expression(method.value))  # None has no weekday.
-                if day.sort.kind in ("date", "datetime"):
-                    weekday = node("weekday", day, sort=INT)  # Monday is 0, and 1 in ISO.
+                value = self.present(self.expression(method.value))  # None has no such method.
+                kind = value.sort.kind
+                if method.attr == "date" and kind == "datetime":
+                    return node("date", value, sort=Domain("date"))
+                if method.attr == "time" and kind == "datetime":
+                    return node("time", value, sort=Domain("time"))
+                if method.attr in ("weekday", "isoweekday") and kind in ("date", "datetime"):
+                    weekday = node("weekday", value, sort=INT)  # Monday is 0, and 1 in ISO.
                     if method.attr == "isoweekday":
                         return node("add", weekday, const(1), sort=INT)
                     return weekday

@@ -105,6 +105,10 @@ def test_solver_date_and_time_parts_match_python(value):
         for name, expected in parts.items():
             term = solver.translate(node(name, var("v", domain), sort=INT))
             assert not solver.fits(term != expected), name
+        if isinstance(value, datetime):  # Its day and time of day, as their encodings.
+            for name in ("date", "time"):
+                term = solver.translate(node(name, var("v", domain), sort=Domain(name)))
+                assert not solver.fits(term != encode(getattr(value, name)())), name
 
 
 METADATA = {  # Annotated items, Field() arguments and values to try, per base type.

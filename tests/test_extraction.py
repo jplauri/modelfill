@@ -282,6 +282,12 @@ def clock_parts(self):
     return self
 
 
+def day_and_time(self):
+    if self.a.date() == self.d or self.a.time() >= self.b:
+        raise ValueError("invalid")
+    return self
+
+
 def boolean_numbers(self):
     if self.a == self.b and self.a + self.b > 1:
         raise ValueError("invalid")
@@ -444,6 +450,11 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
             clock_parts,
             {"a": Domain("datetime"), "b": Domain("time"), "c": Domain("timedelta")},
             CLOCK,
+        ),
+        (
+            day_and_time,
+            {"a": Domain("datetime"), "b": Domain("time"), "d": Domain("date")},
+            {"a": CLOCK["a"], "b": CLOCK["b"], "d": [date.min, date(2025, 1, 2), date.max]},
         ),
         (decimal_comparisons, PRICES, PRICE_GRID),
         (decimal_arithmetic, LEDGER, PRICE_GRID),

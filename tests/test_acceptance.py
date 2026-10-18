@@ -622,6 +622,30 @@ def test_rules_may_read_clock_parts():
         fill(Office, opens=datetime(2025, 1, 1, 8, 30))
 
 
+class Visit(BaseModel):
+    arrives: datetime
+    day: date
+    door: time
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.arrives.date() != self.day or self.arrives.time() < self.door:
+            raise ValueError("a visit arrives on its day, once the door opens")
+        if self.door.hour < 9:
+            raise ValueError("the door opens from nine")
+        return self
+
+
+def test_rules_may_read_the_day_and_time_of_a_datetime():
+    # date() and time() were unsupported, so strict mode refused this. The arrival
+    # nearest 2025-01-01 00:00 is the last instant of the day before.
+    visit = ModelFiller(Visit, mode="strict").fill()
+    assert visit.arrives == datetime(2024, 12, 31, 23, 59, 59, 999999)
+    assert (visit.day, visit.door) == (date(2024, 12, 31), time(9))
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Visit, arrives=datetime(2025, 1, 1, 8), door=time(9))
+
+
 class Limited(BaseModel):
     LIMIT: ClassVar[int] = 7
     n: int
