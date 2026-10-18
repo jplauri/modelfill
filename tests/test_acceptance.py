@@ -515,6 +515,28 @@ def test_rules_may_test_how_strings_start_and_end():
         fill(Catalog, filename="data.json")
 
 
+class Labels(BaseModel):
+    sku: str
+    filename: str
+    email: str
+    code: str = Field(min_length=10)
+
+    @model_validator(mode="after")
+    def check(self):
+        if not self.sku.startswith("SKU-") or not self.filename.endswith((".csv", ".tsv")):
+            raise ValueError("a SKU starts with SKU-, and the file is a CSV or TSV")
+        if "@" not in self.email or not self.code.startswith("X-") or not self.code.endswith("-Z"):
+            raise ValueError("an email has an @, and a code looks like X-...-Z")
+        return self
+
+
+def test_canonical_strings_put_the_name_inside_what_the_rules_test_for():
+    # These were the bare strings the rules mention, and code had no string at all.
+    labels = ModelFiller(Labels, mode="strict").fill()
+    expected = {"sku": "SKU-sku", "filename": "filename.csv", "email": "email@"}
+    assert labels.model_dump() == {**expected, "code": "X-code__-Z"}
+
+
 class Contact(BaseModel):
     email: str
     handle: str

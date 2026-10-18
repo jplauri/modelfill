@@ -349,8 +349,10 @@ value replaces a default that had moved it: `fill(Meeting, duration=3)` keeps
 Strings never come from the solver's own string choices. The rule is the
 field's name; else `name_1` to `name_9`; else the name cut or padded with `_` to
 the allowed length nearest its own (a tie goes longer), then that with its last
-character replaced by `1` to `9`; else the strings the rules mention, then other
-fields' string values, so a confirmation field copies its password.
+character replaced by `1` to `9`; else the name inside strings the rules test the
+field to start with, end with or contain, at the allowed length nearest that, so
+`SKU-sku`, `filename.csv` or `X-code__-Z`; else the strings the rules mention, then
+other fields' string values, so a confirmation field copies its password.
 
 With a [pattern](#string-patterns), every candidate must also match it. When none
 of the name's candidates does, modelfill spells a value from the pattern before
