@@ -21,6 +21,9 @@ class and never uses `model_construct()` as validation.
    `datetime` (naive) and `timedelta` are encoded as integers (days or
    microseconds), which preserves their order and turns Python's date arithmetic
    into exact integer arithmetic, bounded by the real `min`/`max` of each type.
+   A `Decimal` with `decimal_places` counts units of its last place, so `12.34`
+   with two places is 1234 hundredths: operations line operands up on the finer
+   grid, and a product's places are its operands' places added.
    Fields of any other type are external: the solver never sees them.
 4. **Z3 backend:** compile IR into expressions, impose canonical fixed inputs,
    prove impossibility, and choose values: canonical ones by pinning each field
@@ -100,8 +103,8 @@ solver queries; it cannot interrupt arbitrary Python user code. Pure
 deterministic, terminating validators are a precondition.
 
 Fixed inputs use canonical types: exact `int`, `bool`, `str`, `date`, naive
-`datetime` or `timedelta`, actual enum members, supported literal values, and
-`None` for optional fields. An integer input of `True` or `"10"` is rejected
+`datetime` or `timedelta`, a `Decimal` on its field's grid, actual enum members,
+supported literal values, and `None` for optional fields. An integer input of `True` or `"10"` is rejected
 instead of coercing it, as is an aware datetime: mixing aware and naive values
 would make comparisons raise. This keeps the relation between supplied values,
 solver values and returned values explicit. Ordinary defaults are preferences
@@ -122,6 +125,16 @@ explicitly, or enabling Pydantic's `validate_default`, permits an UNSAT proof.
 Diagnostics list them under `unsat_requires_explicit_fields`. modelfill never
 returns an unchecked default merely because ordinary Pydantic construction
 permits it.
+
+Decimals are exact only within the decimal context's precision, 28 digits by
+default: past it, Python rounds a result without a word. Comparisons stay exact at
+any size, so validators may compare any decimals, but arithmetic is modeled only
+where digit bounds prove Python exact. Each decimal sort bounds the digits of its
+units: `max_digits` for a field, the count for a constant, one digit more for a
+sum and the digits added for a product. A result that could outgrow the
+precision is unsupported. Pydantic's `multiple_of` divides in that precision too,
+so where a quotient is too large to divide exactly, the rule leaves the value to
+Pydantic, and no UNSAT proof rests on a rounded division.
 
 External fields are the exception that makes real models usable. Their values
 come from the caller, a provider, the model's own default, a nested model's
