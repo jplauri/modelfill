@@ -85,16 +85,30 @@ SMALL = st.integers(-8, 8)
 LENGTHS = st.integers(0, 6)
 
 
-@given(st.one_of(st.dates(), st.datetimes()))
-def test_solver_years_and_weekdays_match_python(value):
-    domain = Domain("datetime" if isinstance(value, datetime) else "date")
-    solver = Solver({"d": domain}, (), timeout_ms=1000, work_limit=10**6)
-    year, weekday = (
-        solver.translate(node(op, var("d", domain), sort=INT)) for op in ("year", "weekday")
-    )
-    with solver.session({"d": value}):  # Each is pinned to Python's own.
-        assert not solver.fits(year != value.year)
-        assert not solver.fits(weekday != value.weekday())
+PARTS = {  # What the solver reads off each type, besides a date's weekday.
+    date: ("year",),
+    datetime: ("year", "hour", "minute", "second", "microsecond"),
+    time: ("hour", "minute", "second", "microsecond"),
+    timedelta: ("days", "seconds", "microseconds"),
+}
+
+
+@given(st.one_of(st.dates(), st.datetimes(), st.times(), st.timedeltas()))
+def test_solver_date_and_time_parts_match_python(value):
+    kind = {date: "date", datetime: "datetime", time: "time", timedelta: "timedelta"}
+    domain = Domain(kind[type(value)])
+    solver = Solver({"v": domain}, (), timeout_ms=1000, work_limit=10**6)
+    parts = {name: getattr(value, name) for name in PARTS[type(value)]}
+    if isinstance(value, date):
+        parts["weekday"] = value.weekday()
+    with solver.session({"v": value}):  # Each is pinned to Python's own.
+        for name, expected in parts.items():
+            term = solver.translate(node(name, var("v", domain), sort=INT))
+            assert not solver.fits(term != expected), name
+        if isinstance(value, datetime):  # Its day and time of day, as their encodings.
+            for name in ("date", "time"):
+                term = solver.translate(node(name, var("v", domain), sort=Domain(name)))
+                assert not solver.fits(term != encode(getattr(value, name)())), name
 
 
 METADATA = {  # Annotated items, Field() arguments and values to try, per base type.

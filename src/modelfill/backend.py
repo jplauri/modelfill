@@ -55,6 +55,19 @@ def _strings(exprs: Iterable[Expr]) -> Generator[str]:
         yield from _strings(expr.args)
 
 
+# Clock parts of an encoding in microseconds: the part's unit, and how many of them
+# make the next, if any.
+_CLOCK = {
+    "hour": (3_600_000_000, 24),
+    "minute": (60_000_000, 60),
+    "second": (1_000_000, 60),
+    "microsecond": (1, 1_000_000),
+    "days": (DAY, None),
+    "seconds": (1_000_000, 86_400),
+    "microseconds": (1, 1_000_000),
+}
+
+
 def _day(term: Any, sort: Domain) -> Any:
     """A date's or datetime's day number, as toordinal() gives it: 0001-01-01 is 1."""
     return term if sort.kind == "date" else term / DAY + 1
@@ -226,6 +239,14 @@ class Solver:
             return (_day(args[0], expr.args[0].sort) + 6) % 7
         if op == "year":
             return _year(_day(args[0], expr.args[0].sort))
+        if op == "date":  # A datetime's day.
+            return _day(args[0], expr.args[0].sort)
+        if op == "time":  # A datetime's time of day.
+            return args[0] - DAY * (args[0] / DAY)
+        if op in _CLOCK:  # Floor division and a remainder, which agree with Python's.
+            unit, modulus = _CLOCK[op]
+            count = args[0] / unit if unit > 1 else args[0]
+            return count if modulus is None else count - modulus * (count / modulus)
         if op == "startswith":
             return z3.PrefixOf(args[1], args[0])
         if op == "endswith":

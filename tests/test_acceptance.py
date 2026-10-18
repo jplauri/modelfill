@@ -596,6 +596,56 @@ def test_rules_may_read_years():
         fill(Licence, issued=date(2031, 6, 1), expires=date(2040, 12, 31))
 
 
+class Office(BaseModel):
+    opens: datetime
+    closes: time
+    lunch: timedelta
+
+    @model_validator(mode="after")
+    def check(self):
+        if not 9 <= self.opens.hour < 17 or self.opens.minute != 30:
+            raise ValueError("it opens on a half hour in office hours")
+        if self.opens.second or self.opens.microsecond or self.closes.hour < 17:
+            raise ValueError("it opens on the minute, and closes from five")
+        if self.lunch.days or self.lunch.seconds < 1800:
+            raise ValueError("lunch lasts half an hour to a day")
+        return self
+
+
+def test_rules_may_read_clock_parts():
+    # These were unsupported, so strict mode refused this, and auto mode failed. The
+    # nearest such opening to 2025-01-01 00:00 is the evening before.
+    office = ModelFiller(Office, mode="strict").fill()
+    assert office.opens == datetime(2024, 12, 31, 16, 30)
+    assert (office.closes, office.lunch) == (time(17), timedelta(minutes=30))
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Office, opens=datetime(2025, 1, 1, 8, 30))
+
+
+class Visit(BaseModel):
+    arrives: datetime
+    day: date
+    door: time
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.arrives.date() != self.day or self.arrives.time() < self.door:
+            raise ValueError("a visit arrives on its day, once the door opens")
+        if self.door.hour < 9:
+            raise ValueError("the door opens from nine")
+        return self
+
+
+def test_rules_may_read_the_day_and_time_of_a_datetime():
+    # date() and time() were unsupported, so strict mode refused this. The arrival
+    # nearest 2025-01-01 00:00 is the last instant of the day before.
+    visit = ModelFiller(Visit, mode="strict").fill()
+    assert visit.arrives == datetime(2024, 12, 31, 23, 59, 59, 999999)
+    assert (visit.day, visit.door) == (date(2024, 12, 31), time(9))
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Visit, arrives=datetime(2025, 1, 1, 8), door=time(9))
+
+
 class Limited(BaseModel):
     LIMIT: ClassVar[int] = 7
     n: int

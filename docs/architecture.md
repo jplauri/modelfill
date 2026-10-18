@@ -23,7 +23,8 @@ class and never uses `model_construct()` as validation.
    into exact integer arithmetic, bounded by the real `min`/`max` of each type.
    A date's `.weekday()` is its day number's remainder by 7, and its `.year`
    counts the whole 400-, 100-, 4- and 1-year cycles in it, as `datetime` does:
-   division by constants, which Z3 keeps linear.
+   division by constants, which Z3 keeps linear. Clock parts such as `.hour`, and a
+   datetime's `.date()` and `.time()`, divide the microseconds the same way.
    A `Decimal` with `decimal_places` counts units of its last place, so `12.34`
    with two places is 1234 hundredths: operations line operands up on the finer
    grid, and a product's places are its operands' places added.
