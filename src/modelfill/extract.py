@@ -143,8 +143,9 @@ class _Analyzer:
         # Locals set on some paths only, with the condition that they are: reading one
         # elsewhere raises UnboundLocalError.
         self.maybe: dict[str, Expr] = {}
-        # Names a match pattern bound: after the match they are set on paths this does
-        # not follow (a failed guard leaves its capture bound), so they cannot be read.
+        # Names a match pattern bound: outside their case, in later cases and after the
+        # match, they are set on paths this does not follow (a failed guard leaves its
+        # capture bound), so they cannot be read.
         self.hidden: set[str] = set()
         self.requires: list[Expr] = []
         try:
@@ -229,9 +230,11 @@ class _Analyzer:
             self.bind(names, subject)
             return self.block(case.body)
 
-        returned, continued = self.fork(
-            _and(matched, guard), body, partial(self.cases, subject, cases[1:]), case.pattern
-        )
+        def rest() -> tuple[Expr, Expr]:
+            self.hidden.update(names)  # A failed guard leaves its captures bound.
+            return self.cases(subject, cases[1:])
+
+        returned, continued = self.fork(_and(matched, guard), body, rest, case.pattern)
         return _and(safe, returned), _and(safe, continued)
 
     def pattern(self, subject: Expr, pattern: ast.pattern, names: list[str]) -> Expr:
@@ -515,7 +518,7 @@ class _Analyzer:
                     raise self.unsupported(syntax, "a nested model is read only through its fields")
                 return var(self.field_name, self.fields[self.field_name])
             if syntax.id in self.hidden:
-                raise self.unsupported(syntax, f"{syntax.id} is read after the match that binds it")
+                raise self.unsupported(syntax, f"{syntax.id} is read outside its binding case")
             if syntax.id in self.bound:
                 if syntax.id in self.maybe:  # Unset on some paths, where reading raises.
                     self.requires.append(self.maybe[syntax.id])

@@ -201,9 +201,9 @@ def test_canonical_meetings_are_stable_and_impossibility_is_real(partial):
     assert ModelFiller(Meeting).batch(1, **partial) == [meeting]
 
 
-# Random validators over two integer reads, within the supported grammar.
-def validators(first: str, second: str) -> st.SearchStrategy[list[str]]:
-    atoms = st.sampled_from([first, second]) | st.integers(-4, 4).map(str)
+def expressions(*reads: str) -> tuple[st.SearchStrategy[str], st.SearchStrategy[str]]:
+    """Integer terms and conditions over these reads and small literals."""
+    atoms = st.sampled_from(reads) | st.integers(-4, 4).map(str)
     terms = st.recursive(
         atoms,
         lambda inner: st.one_of(
@@ -233,6 +233,50 @@ def validators(first: str, second: str) -> st.SearchStrategy[list[str]]:
         ),
         max_leaves=3,
     )
+    return terms, conditions
+
+
+def matches(first: str, second: str) -> st.SearchStrategy[str]:
+    """A literal local, then a match on a field with a case that captures it anew under
+    a guard, which may fail, among cases that may read it. Their plain comparisons are
+    likely to flip on a stale value of the local."""
+    numbers = st.integers(-2, 2).map(str)
+    fields = st.sampled_from([first, second])
+    reads = fields | numbers | st.just("seen")
+    operators = st.sampled_from(["==", "!=", "<", ">"])
+    conditions = st.tuples(reads, operators, reads).map(" ".join)
+    captures = st.just("seen") | numbers.map("{} as seen".format)
+    patterns = st.one_of(
+        numbers,
+        st.tuples(numbers, numbers).map(" | ".join),
+        captures,
+        st.just("_"),
+    )
+    guards = conditions.map(" if {}".format)
+    bodies = st.sampled_from(["raise ValueError('rejected')", "return self", "pass"])
+    bodies |= conditions.map("if {}:\n                raise ValueError('rejected')".format)
+    case = st.tuples(patterns, st.just("") | guards, bodies)
+    cases = st.tuples(
+        st.lists(case, max_size=1),
+        st.tuples(captures, guards, bodies),
+        st.lists(case, min_size=1, max_size=2),
+    ).map(lambda parts: [*parts[0], parts[1], *parts[2]])
+
+    def render(parts: tuple[str, str, list[tuple[str, str, str]]]) -> str:
+        value, subject, cases = parts
+        lines = [f"    seen = {value}", f"    match {subject}:"]
+        for pattern, guard, body in cases:
+            lines += [f"        case {pattern}{guard}:", f"            {body}"]
+            if pattern in ("seen", "_") and not guard:
+                break  # Python refuses the cases after one that always matches.
+        return "\n".join(lines)
+
+    return st.tuples(numbers, fields, cases).map(render)
+
+
+# Random validators over two integer reads, within the supported grammar.
+def validators(first: str, second: str) -> st.SearchStrategy[list[str]]:
+    _, conditions = expressions(first, second)
     statements = st.one_of(
         conditions.map(lambda c: f"    if {c}:\n        raise ValueError('rejected')"),
         conditions.map(lambda c: f"    if {c}:\n        return self"),
@@ -243,6 +287,7 @@ def validators(first: str, second: str) -> st.SearchStrategy[list[str]]:
                 f"    elif {t[1]}:\n        return self"
             )
         ),
+        matches(first, second),
     )
     return st.lists(statements, min_size=1, max_size=3)
 

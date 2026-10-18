@@ -650,6 +650,17 @@ def capture_after_match(self):
     return self
 
 
+def capture_in_later_case(self):
+    seen = 0
+    match self.a:
+        case seen if seen > 1:
+            pass
+        case _:
+            if seen != self.a:  # Bound by the case before, whose guard failed.
+                raise ValueError("invalid")
+    return self
+
+
 def class_pattern(self):
     match self.a:
         case int(value) if value > 1:
@@ -658,8 +669,10 @@ def class_pattern(self):
 
 
 def test_match_patterns_beyond_values_are_unsupported():
-    with pytest.raises(UnsupportedConstraint, match="other is read after the match"):
+    with pytest.raises(UnsupportedConstraint, match="other is read outside its binding case"):
         extract_validator(capture_after_match, {"a": INT})
+    with pytest.raises(UnsupportedConstraint, match="seen is read outside its binding case"):
+        extract_validator(capture_in_later_case, {"a": INT})
     with pytest.raises(UnsupportedConstraint, match="unsupported pattern MatchClass"):
         extract_validator(class_pattern, {"a": INT})
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A `match` case that reads a name an earlier case captured is unsupported. A
+  capture stays bound when its guard fails, so the later case sees the captured
+  value, but modelfill read the value from before the match, and could call a
+  satisfiable model impossible.
+
 ## 0.4.0
 
 Rules may read much more: `Decimal` fields with `decimal_places`, string methods,

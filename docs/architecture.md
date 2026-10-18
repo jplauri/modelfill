@@ -62,8 +62,10 @@ like `raise`, unless `python -O` removed it. A local that branches set different
 holds, after them, the value of the branch taken: a conditional value the solver
 already models. Where only some paths set it, a read on the others raises
 `UnboundLocalError`, which rejects like the requirements below. `match` is the same
-chain of tests as `if`/`elif`, one per case. Reassigning a parameter could disguise
-a transformed return value and is unsupported.
+chain of tests as `if`/`elif`, one per case. A capture may be read only in its own
+case and guard: one whose guard fails stays bound in the cases after it and past
+the match, holding a value the chain does not track. Reassigning a parameter could
+disguise a transformed return value and is unsupported.
 
 Python's `and` and `or` return operands. They are logical connectives when their
 results are tested for truth, but `(a or b) == 2` requires conditional operand
