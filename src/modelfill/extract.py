@@ -50,6 +50,14 @@ _UNRESOLVED = object()
 # and a dataclass's __post_init__ rejects with any of them.
 _REJECTIONS = (ValueError, AssertionError, PydanticCustomError)
 
+# The integer attributes of dates and times that validators may read, by kind.
+_PARTS = {
+    "date": ("year",),
+    "datetime": ("year", "hour", "minute", "second", "microsecond"),
+    "time": ("hour", "minute", "second", "microsecond"),
+    "timedelta": ("days", "seconds", "microseconds"),
+}
+
 # Kinds that min() and max() compare, one kind at a time.
 _ORDERED = ("int", "date", "datetime", "time", "timedelta")
 
@@ -423,10 +431,10 @@ class _Analyzer:
                     member = None
                 if member is not None and member.sort.kind == "enum" and member.sort.choices:
                     return self.member_attribute(member, syntax.attr, syntax)
-            if syntax.attr == "year":
-                day = self.present(self.expression(syntax.value))  # None has no year.
-                if day.sort.kind in ("date", "datetime"):
-                    return node("year", day, sort=INT)
+            if any(syntax.attr in names for names in _PARTS.values()):
+                value = self.present(self.expression(syntax.value))  # None has none.
+                if syntax.attr in _PARTS.get(value.sort.kind, ()):
+                    return node(syntax.attr, value, sort=INT)
             raise self.unsupported(
                 syntax, "only model fields and literal Enum members are supported attributes"
             )

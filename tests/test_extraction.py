@@ -6,7 +6,7 @@ import datetime as dt
 import decimal as dc
 import inspect
 import itertools
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum, IntEnum
 from types import SimpleNamespace
@@ -272,6 +272,16 @@ def years(self):
     return self
 
 
+def clock_parts(self):
+    if not 9 <= self.a.hour < 17 or self.a.minute % 15 != 0:
+        raise ValueError("invalid")
+    if self.b.second + self.b.microsecond > self.a.second or self.b.hour == self.a.hour:
+        raise ValueError("invalid")
+    if self.c.days < 0 and self.c.seconds + self.c.microseconds == 0:
+        raise ValueError("invalid")
+    return self
+
+
 def boolean_numbers(self):
     if self.a == self.b and self.a + self.b > 1:
         raise ValueError("invalid")
@@ -375,6 +385,25 @@ YEARS = {  # Each side of New Year, a leap day closing a 4- and a 400-year cycle
         datetime.max,
     ],
 }
+CLOCK = {  # Instants, times and durations either side of each part's edges.
+    "a": [
+        datetime.min,
+        datetime.max,
+        datetime(2025, 1, 1, 8, 59, 59, 999999),
+        datetime(2025, 1, 1, 9),
+        datetime(2025, 1, 1, 9, 15, 1),
+        datetime(2025, 1, 1, 16, 59, 59),
+        datetime(2025, 1, 2, 17),
+    ],
+    "b": [time(0), time(9, 0, 0, 1), time(9, 15, 30), time(23, 59, 59, 999999)],
+    "c": [
+        timedelta(days=-1),
+        timedelta(microseconds=-1),
+        timedelta(0),
+        timedelta(hours=-25),
+        timedelta(days=2, seconds=5),
+    ],
+}
 WEEK = {  # A week of dates, and instants around midnights, Python's first and last too.
     "a": [date.min, date.max, *(date(2025, 1, 1) + timedelta(days=n) for n in range(8))],
     "b": [
@@ -411,6 +440,11 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
         (schedule_rules, SCHEDULE, SCHEDULE_GRID),
         (weekdays, {"a": Domain("date"), "b": Domain("datetime")}, WEEK),
         (years, {"a": Domain("date"), "b": Domain("datetime")}, YEARS),
+        (
+            clock_parts,
+            {"a": Domain("datetime"), "b": Domain("time"), "c": Domain("timedelta")},
+            CLOCK,
+        ),
         (decimal_comparisons, PRICES, PRICE_GRID),
         (decimal_arithmetic, LEDGER, PRICE_GRID),
         (boolean_numbers, {"a": BOOL, "b": INT}, {"a": (False, True), "b": range(-1, 3)}),

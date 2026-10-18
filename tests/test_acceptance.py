@@ -596,6 +596,32 @@ def test_rules_may_read_years():
         fill(Licence, issued=date(2031, 6, 1), expires=date(2040, 12, 31))
 
 
+class Office(BaseModel):
+    opens: datetime
+    closes: time
+    lunch: timedelta
+
+    @model_validator(mode="after")
+    def check(self):
+        if not 9 <= self.opens.hour < 17 or self.opens.minute != 30:
+            raise ValueError("it opens on a half hour in office hours")
+        if self.opens.second or self.opens.microsecond or self.closes.hour < 17:
+            raise ValueError("it opens on the minute, and closes from five")
+        if self.lunch.days or self.lunch.seconds < 1800:
+            raise ValueError("lunch lasts half an hour to a day")
+        return self
+
+
+def test_rules_may_read_clock_parts():
+    # These were unsupported, so strict mode refused this, and auto mode failed. The
+    # nearest such opening to 2025-01-01 00:00 is the evening before.
+    office = ModelFiller(Office, mode="strict").fill()
+    assert office.opens == datetime(2024, 12, 31, 16, 30)
+    assert (office.closes, office.lunch) == (time(17), timedelta(minutes=30))
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Office, opens=datetime(2025, 1, 1, 8, 30))
+
+
 class Limited(BaseModel):
     LIMIT: ClassVar[int] = 7
     n: int
