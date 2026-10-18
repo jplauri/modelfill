@@ -15,6 +15,7 @@ from annotated_types import Ge, Gt, Le, Lt, MaxLen, MinLen, MultipleOf
 from pydantic import (
     AfterValidator,
     BaseModel,
+    ConfigDict,
     Field,
     RootModel,
     ValidationError,
@@ -382,9 +383,17 @@ class Count(RootModel[int]):
     root: int = Field(ge=3)
 
 
+class Tally(RootModel[int]):
+    model_config = ConfigDict(alias_generator=str.upper)
+    root: int = Field(ge=3)
+
+
 def test_root_models_are_supported():
-    # Strict mode once refused RootModel's own __init__ as custom.
+    # Strict mode once refused RootModel's own __init__ as custom, and an alias on the
+    # root passed the value under it, as a dict that RootModel took for the root.
     assert ModelFiller(Count, mode="strict").fill().root == 3
+    assert ModelFiller(Tally, mode="strict").fill().root == 3
+    assert fill(Tally, root=5).root == 5
 
 
 def test_new_types_and_type_aliases_are_read_through():

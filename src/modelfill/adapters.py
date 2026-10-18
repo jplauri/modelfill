@@ -511,7 +511,9 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
     by_name = bool(config.get("validate_by_name") or config.get("populate_by_name"))
     for index, (name, info) in enumerate(model.model_fields.items()):
         annotation, inherited = _resolve(info.annotation)
-        input_path = _input_path(name, info.validation_alias, by_alias, by_name)
+        # A RootModel takes its value as root, whatever alias the field has.
+        alias = None if issubclass(model, RootModel) else info.validation_alias
+        input_path = _input_path(name, alias, by_alias, by_name)
         factory = info.default_factory
         if info.default_factory_takes_validated_data:  # None without a factory.
             unsupported.append(f"Field {name!r}: data-dependent default factory is unsupported")

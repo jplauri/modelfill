@@ -23,6 +23,9 @@
 - A required nested model behind a `type` alias or a `NewType`, as in `child:
   ChildAlias`, is solved with its parent, like one annotated directly. It was
   completed on its own, so a parent's rule that read it was unsupported.
+- A `RootModel` whose `root` has an alias, its own or from an `alias_generator`,
+  fills. The value went in under the alias, as a dict that RootModel took for the
+  root.
 
 ## 0.4.0
 
