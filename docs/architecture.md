@@ -206,7 +206,9 @@ integer encoding nearest its anchor, or a readable string. The nearest integer
 comes from plain satisfiability probes: the anchor itself, then the least
 allowed value above it, by bisection that starts from the model's own value
 (often the minimum already), then a strictly closer value below. Strings try
-readable candidates in a fixed order. Each answer is the unique best value under
+readable candidates in a fixed order, among them the name inside the strings a rule
+tests the field to start with, end with or contain, which Z3 models exactly as
+`PrefixOf`, `SuffixOf` and `Contains`. Each answer is the unique best value under
 the rule, so it depends neither on which model Z3 returns nor on solver history
 or the Z3 version. The price is around a dozen small checks for the three-field
 meeting; bisection is logarithmic in the gap between anchor and value.
