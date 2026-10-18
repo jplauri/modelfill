@@ -13,6 +13,9 @@
   precision, a sum that Python rounds was taken as exact, and a satisfiable model
   could be called impossible. Arithmetic that could pass the context's exponent
   limits, where Python rounds a tiny result to zero, is unsupported as well.
+- A given value of a recursive `type` alias, such as `type Json = dict[str, Json] |
+  list[Json] | str | int | bool | None`, is kept, and any dicts in it that stand for
+  models are completed, instead of raising `RecursionError`.
 
 ## 0.4.0
 

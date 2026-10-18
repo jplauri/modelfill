@@ -387,6 +387,22 @@ def test_dicts_inside_given_collections_and_unions_are_completed():
         fill(Basket, lines=[{}])
 
 
+type Json = dict[str, Json] | list[Json] | str | int | bool | None
+type Catalog = dict[str, Line | Catalog]
+
+
+class Document(BaseModel):
+    data: Json
+    catalog: Catalog
+
+
+def test_recursive_type_aliases_are_read_once():
+    # Looking for models in a recursive alias never ended, even in a given value.
+    document = fill(Document, data={"ok": [1, None]}, catalog={"a": {}, "b": {"c": {}}})
+    line = Line(sku="sku", quantity=1, id=NIL4)
+    assert (document.data, document.catalog) == ({"ok": [1, None]}, {"a": line, "b": {"c": line}})
+
+
 class Van(BaseModel):
     kind: Literal["van"]
     plate: UUID

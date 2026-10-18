@@ -12,7 +12,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Literal, Union, get_args, get_origin
+from typing import Any, Literal, TypeAliasType, Union, get_args, get_origin
 
 from annotated_types import Ge, Gt, Le, Lt, MinLen, MultipleOf
 from pydantic import (
@@ -83,13 +83,17 @@ def nested_model(annotation: Any) -> type | None:
     return None
 
 
-def models_in(annotation: Any) -> list[type]:
+def models_in(annotation: Any, aliases: frozenset[TypeAliasType] = frozenset()) -> list[type]:
     """The models a value of this type can hold, at any depth: itself, a collection's
-    elements or values, a union's members."""
+    elements or values, a union's members. A recursive type alias is read once."""
+    if isinstance(annotation, TypeAliasType):
+        if annotation in aliases:
+            return []  # Its models are those found where it was read first.
+        aliases |= {annotation}
     annotation = _resolve(annotation)[0]
     if nested_model(annotation) is annotation:
         return [annotation]
-    return [model for arg in get_args(annotation) for model in models_in(arg)]
+    return [model for arg in get_args(annotation) for model in models_in(arg, aliases)]
 
 
 def boring(annotation: Any, metadata: Sequence[Any] = (), fill: Fill | None = None) -> Any:
