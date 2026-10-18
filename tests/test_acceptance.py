@@ -496,6 +496,66 @@ def test_multiples_past_the_precision_are_left_to_pydantic():
     assert ModelFiller(Vast, mode="strict").fill().x == Decimal(f"{10**27}.1")
 
 
+class Catalog(BaseModel):
+    sku: str
+    filename: str
+
+    @model_validator(mode="after")
+    def check(self):
+        if not self.sku.startswith("SKU-") or not self.filename.endswith((".csv", ".tsv")):
+            raise ValueError("a SKU starts with SKU-, and the file is a CSV or TSV")
+        return self
+
+
+def test_rules_may_test_how_strings_start_and_end():
+    # Both methods were unsupported, so strict mode refused this.
+    catalog = ModelFiller(Catalog, mode="strict").fill()
+    assert catalog.sku.startswith("SKU-") and catalog.filename.endswith((".csv", ".tsv"))
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Catalog, filename="data.json")
+
+
+class Labels(BaseModel):
+    sku: str
+    filename: str
+    email: str
+    code: str = Field(min_length=10)
+
+    @model_validator(mode="after")
+    def check(self):
+        if not self.sku.startswith("SKU-") or not self.filename.endswith((".csv", ".tsv")):
+            raise ValueError("a SKU starts with SKU-, and the file is a CSV or TSV")
+        if "@" not in self.email or not self.code.startswith("X-") or not self.code.endswith("-Z"):
+            raise ValueError("an email has an @, and a code looks like X-...-Z")
+        return self
+
+
+def test_canonical_strings_put_the_name_inside_what_the_rules_test_for():
+    # These were the bare strings the rules mention, and code had no string at all.
+    labels = ModelFiller(Labels, mode="strict").fill()
+    expected = {"sku": "SKU-sku", "filename": "filename.csv", "email": "email@"}
+    assert labels.model_dump() == {**expected, "code": "X-code__-Z"}
+
+
+class Contact(BaseModel):
+    email: str
+    handle: str
+
+    @model_validator(mode="after")
+    def check(self):
+        if "@" not in self.email or " " in self.handle:
+            raise ValueError("an email has an @, and a handle no spaces")
+        return self
+
+
+def test_rules_may_look_for_substrings():
+    # A substring test was unsupported, so strict mode refused this.
+    contact = ModelFiller(Contact, mode="strict").fill()
+    assert "@" in contact.email and " " not in contact.handle
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Contact, handle="two words")
+
+
 class Limited(BaseModel):
     LIMIT: ClassVar[int] = 7
     n: int

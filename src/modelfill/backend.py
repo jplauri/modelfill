@@ -55,6 +55,17 @@ def _strings(exprs: Iterable[Expr]) -> Generator[str]:
         yield from _strings(expr.args)
 
 
+def _affixes(exprs: Iterable[Expr]) -> Generator[tuple[str, str]]:
+    """(field, string) for each string a rule tests a field to start with, end with
+    or contain, in rule order."""
+    for expr in exprs:
+        if expr.op in ("startswith", "endswith", "contains"):
+            whole, part = expr.args
+            if whole.op == "var" and part.op == "const":
+                yield whole.value, part.value
+        yield from _affixes(expr.args)
+
+
 class Solver:
     """Incremental solving over immutable IR; never shared between threads."""
 
@@ -111,6 +122,9 @@ class Solver:
         self.engine.add(*(self.translate(expr) for expr in constraints))
         self.guidance = [self.translate(expr) for expr in guidance]
         self.strings = list(dict.fromkeys(_strings([*constraints, *guidance])))
+        self.affixes: dict[str, list[str]] = {}
+        for name, text in dict.fromkeys(_affixes([*constraints, *guidance])):
+            self.affixes.setdefault(name, []).append(text)
         self.ranges_key: frozenset[tuple[str, Any]] | None = None
         self.ranges: dict[str, tuple[int | None, int | None]] = {}
 
@@ -189,6 +203,12 @@ class Solver:
             return z3.If(*args)
         if op == "len":
             return z3.Length(args[0])
+        if op == "startswith":
+            return z3.PrefixOf(args[1], args[0])
+        if op == "endswith":
+            return z3.SuffixOf(args[1], args[0])
+        if op == "contains":
+            return z3.Contains(args[0], args[1])
         raise UnsupportedConstraint(f"Unknown IR operation: {op}")
 
     @contextmanager
@@ -293,6 +313,7 @@ class Solver:
         strings that the rules or other fields mention, the rest after them.
         """
         length = z3.Length(self.variables[name])
+        affixes = self.affixes.get(name, [])[:4]  # A few: each pair makes a candidate.
         name = name.rpartition(".")[2]  # A nested field reads as its own name.
         yield name
         if self.fits(length == len(name) + 2):
@@ -303,6 +324,17 @@ class Solver:
         yield from (base[:-1] + digit for digit in "123456789" if size)
         spelled = iter(spelled)
         yield from islice(spelled, 1)
+        # The name inside strings the rules test for, at the allowed length nearest
+        # that: email@, SKU-sku, X-code-Z.
+        sizes = cache(lambda size: self.nearest(length, size))
+        wrappings = [*(("", affix) for affix in affixes), *((affix, "") for affix in affixes)]
+        wrappings += [
+            (prefix, suffix) for prefix in affixes for suffix in affixes if prefix != suffix
+        ]
+        for prefix, suffix in wrappings:
+            size = sizes(len(prefix + name + suffix)) - len(prefix) - len(suffix)
+            if size >= 0:
+                yield prefix + (name + "_" * size)[:size] + suffix
         yield from self.strings  # Strings the rules mention, then other fields' values.
         yield from known
         yield from spelled

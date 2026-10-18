@@ -535,6 +535,14 @@ class _Analyzer:
                 links.append(link)
             return _and(*links)
         if isinstance(syntax, ast.Call):
+            method = syntax.func
+            if (
+                isinstance(method, ast.Attribute)
+                and method.attr in ("startswith", "endswith")
+                and len(syntax.args) == 1
+                and not syntax.keywords
+            ):
+                return self.affix(method.attr, method.value, syntax.args[0], syntax)
             function = self.callee(syntax.func)
             if function is len and len(syntax.args) == 1 and not syntax.keywords:
                 operand = self.present(self.expression(syntax.args[0]))
@@ -572,6 +580,16 @@ class _Analyzer:
                         result = node("ite", better, value, result, sort=sort)
                     return result
         raise self.unsupported(syntax, f"unsupported expression {type(syntax).__name__}")
+
+    def affix(self, method: str, text: ast.expr, argument: ast.expr, syntax: ast.AST) -> Expr:
+        """text.startswith(argument) or text.endswith(argument), where the argument is a
+        string or a literal tuple of them, any of which will do."""
+        value = self.present(self.expression(text))  # None has no such method.
+        options = argument.elts if isinstance(argument, ast.Tuple) else [argument]
+        affixes = [self.present(self.expression(option)) for option in options]
+        if any(part.sort.kind != "str" for part in (value, *affixes)):
+            raise self.unsupported(syntax, f"{method}() needs strings")
+        return _or(*(node(method, value, affix) for affix in affixes))
 
     def choice(self, condition: Expr, yes: Expr, no: Expr, syntax: ast.AST) -> Expr:
         """yes where condition holds, else no: two values of one supported type, or
@@ -629,8 +647,14 @@ class _Analyzer:
             return self.compare(left, right, operation, syntax), right
         if len(syntax.ops) > 1:
             raise self.unsupported(syntax, "membership cannot participate in a chained comparison")
-        if not isinstance(right_syntax, (ast.Tuple, ast.List, ast.Set)):
-            raise self.unsupported(syntax, "membership requires a literal tuple/list/set")
+        if not isinstance(right_syntax, (ast.Tuple, ast.List, ast.Set)):  # A substring?
+            right = self.present(self.expression(right_syntax))
+            if left.sort.kind != "str" or right.sort.kind != "str":
+                raise self.unsupported(
+                    syntax, "membership needs a literal tuple/list/set or a string"
+                )
+            test = node("contains", right, self.present(left))
+            return (_not(test) if isinstance(operation, ast.NotIn) else test), left
         members = [self.expression(member) for member in right_syntax.elts]
         if any(member.op != "const" for member in members):
             raise self.unsupported(
