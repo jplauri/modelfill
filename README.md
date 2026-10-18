@@ -15,7 +15,7 @@ To hunt bugs instead, [explore with Hypothesis](#exploration-with-hypothesis):
 Hypothesis draws the fields you care about, and modelfill solves the rest with
 random values that favor the edges of what the rules allow.
 
-modelfill reads a [documented subset](#exact-recognized-validator-language) of
+modelfill reads a [documented subset](docs/supported.md#validators) of
 Python: pure, deterministic validators that reject invalid input. It reports
 logic outside that subset, and it never claims a contradiction it cannot prove.
 
@@ -174,90 +174,25 @@ filler.explain()  # fresh JSON-friendly dictionary
 
 ## Supported features
 
-| Area | Support |
-| --- | --- |
-| Pydantic | v2 `BaseModel` and `RootModel`, with inherited validators |
-| Dataclasses | Standard dataclasses, including frozen and slotted classes; pure `__post_init__`, when the generated `__init__` calls it (a subclass that is not decorated again never runs its own) |
-| Types | Exact `int`, `bool`, `str`, `date`, naive `datetime`, naive `time`, `timedelta`; `Decimal` with `decimal_places`; ordinary `Enum`, `IntEnum`, `StrEnum`; homogeneous `Literal` subsets; any of these `\| None` (`Optional`, or `None` inside a `Literal`), also behind a `NewType`, a `type` alias or an `Annotated` inside the `Optional`, whose constraints apply; other types as [external fields](#fields-the-solver-does-not-model) |
-| Numeric metadata | Integer, decimal, date, datetime and timedelta `Field(gt, ge, lt, le)`, respecting strict and inclusive bounds; integer and decimal `Field(multiple_of)`; a decimal's `max_digits` and `decimal_places`, exactly as Pydantic counts them; on optional fields they constrain non-None values, as in Pydantic |
-| String metadata | `Field(min_length, max_length)` and global `str_min_length` / `str_max_length`; a [`pattern`](#string-patterns), with either regex engine |
-| Model validators | Instance `@model_validator(mode="after")`, returning the original `self` on successful paths |
-| Field validators | `@field_validator(mode="after")`, and `Annotated[..., AfterValidator(f)]` with a named function `f`, returning the original value, including literal `info.data["earlier_field"]` reads |
-| Nested models | A required nested model (Pydantic or dataclass) is solved with its parent: rules may read `self.customer.age`, and a dict fixes some of its fields. Optional nested models and those with defaults are completed on their own |
-| Aliases | Distinct string input/validation aliases, `AliasPath`s of keys into nested dicts, and `AliasChoices`, of which the first such choice is used, else the field name if Pydantic accepts it; API still uses field names |
-| Defaults | Copied values and zero-argument factories as preferences |
-| Fixed fields | Any subset, solved simultaneously; no left-to-right dependency order required |
+At a glance; [the full list](docs/supported.md) gives every form.
 
-Pydantic field metadata is read through public `model_fields`, and combines as
-Pydantic combines it: when a field repeats one kind of bound, the last one wins,
-with `Field()` counted before `Annotated[...]`. So `Field(ge=10)` on an
-`Annotated[int, Ge(0)]` alias leaves `ge=0` in force, in Pydantic and modelfill
-alike. Groups such as `conint(...)`, `constr(...)`, `StringConstraints` and
-`Interval` count as their single constraints. Validator discovery uses Pydantic's
-private `__pydantic_decorators__` registry; CI tests it against the oldest
-supported Pydantic release. Dataclass `Annotated` metadata is not a validation
-rule unless the dataclass's own code enforces it, so modelfill does not impose it.
+- **Models**: Pydantic v2 `BaseModel` and `RootModel`, and standard dataclasses
+  with a pure `__post_init__`.
+- **Solved fields**: `int`, `bool`, `str`, `date`, naive `datetime` and `time`,
+  `timedelta`, `Decimal` with `decimal_places`, plain Enums and `Literal`s, each
+  also `| None`, and behind a `NewType`, a `type` alias or `Annotated`.
+- **Field constraints**: bounds, `multiple_of`, lengths, `pattern`, `max_digits`
+  and `decimal_places`, also in groups such as `conint()` and `StringConstraints`.
+- **Validators**: `@model_validator(mode="after")`, `@field_validator(mode="after")`,
+  `AfterValidator` and a dataclass's `__post_init__`, written with `if`, `match`,
+  `assert` and locals; comparisons and arithmetic; `abs()`, `min()`, `max()` and
+  `len()`; `startswith()`, `endswith()` and substring `in`; date and time parts
+  such as `.year`, `.weekday()` and `.hour`; and Enum members' `.value` and `.name`.
+- **Everything else**: a field of another type is
+  [external](#fields-the-solver-does-not-model), and other validation logic is
+  unsupported, as below.
 
-### String patterns
-
-A string field's `pattern`, from `Field`, `constr` or `StringConstraints`, never
-reaches the solver. Pydantic itself decides what matches: every candidate is
-checked against the pattern by Pydantic, so any pattern Pydantic accepts, under
-either `regex_engine`, means exactly what it means in your model. modelfill reads
-the pattern with Python's regex parser only to spell values from it, as
-[canonical values](#canonical-values) describes. A pattern it cannot read, such as
-one with Rust's `\p{L}`, is still checked; only the field's name-based candidates
-are tried for it.
-
-Because the solver then allows more values than Pydantic, never fewer, a pattern
-cannot cause a false proof of impossibility. A fixed value that breaks a pattern is
-a proven contradiction: `code='usd' conflict with code pattern '^[A-Z]{3}$'`. When
-the rules and a pattern cannot both hold, though, the result is
-`GenerationExhausted`, naming the pattern.
-
-### Exact recognized validator language
-
-| Construct | Accepted forms |
-| --- | --- |
-| Statements | `if` / `elif` / `else`; `match` with literal, dotted-constant, `None`/`True`/`False`, `\|`, capture, `as` and wildcard patterns and `if` guards (a name a pattern binds is read in its case and guard only); `pass`, string docstrings, `assert`, supported `raise`, supported `return`, single-name local assignments (`x = …`, `x: T = …`), other than to validator parameters, also inside branches, after which a local holds the value of the branch taken (a local set on some paths only raises `UnboundLocalError` where read on the others, which rejects that path; one that may be `None` on some path is unsupported) |
-| Rejection | `raise` of builtin `ValueError` or `AssertionError`, or of `PydanticCustomError`, with any message, including f-strings, and any `from` clause (both only run on paths that already reject); a failing `assert`, which `python -O` removes as usual |
-| Successful return | Original `self` for model validators, original value for field validators; bare return, `return None`, or fallthrough for dataclasses |
-| References | `self.field`, and `self.customer.age` through required nested models; field validator value parameter, or its fields when it validates a nested model; `info.data["earlier_field"]`, and `info.field_name`; previously assigned locals; named constants and standard Enum members from globals/closures, and the class's `ClassVar` constants through `self` or `cls` |
-| Constants | Integer, Boolean, string, `None`, finite `Decimal`; `date(…)`, `datetime(…)`, `time(…)` and `timedelta(…)` calls with integer literal arguments; `Decimal(…)` of a string or integer literal |
-| Builtin calls | `abs(x)` of an integer or a decimal; `min(…)` and `max(…)` of two or more numbers (integers and decimals) or values of one date/time type, the first of equal values winning as in Python |
-| Arithmetic | Integer/Boolean `+`, `-`, unary `+`/`-`; multiplication with an integer literal operand; `%` and `//` by a positive integer literal; decimal `+`, `-`, unary `+`/`-` and multiplication with an integer or `Decimal` literal operand, integers mixed in, when each decimal read has `max_digits` and no result can outgrow the decimal context's precision, so Python never rounds it; Python's date rules: `datetime ± timedelta`, `datetime - datetime`, `date ± timedelta` (whole days, like `timedelta.days`), `date - date`, `timedelta ± timedelta`, `timedelta * int literal`, `-timedelta` |
-| Comparisons | `==`, `!=`; `<`, `<=`, `>`, `>=` between numbers (integers, Booleans and decimals, by value) or two values of one date/time type; chained comparisons; identity checks only against `None` |
-| `None` | `x is None`, `x is not None`, `x == None`, truthiness, `x or default`; an operation that raises `TypeError` on `None` (`x < y`, `x + 1`, `len(x)`) rejects that path, so guard it as Python code does: `x is not None and x < y` |
-| Boolean operations | `and`, `or`, `not`, with Python truthiness and short circuit meaning; operand-valued `and`/`or` when operands have the same supported type, or are decimals and integers, and cannot be `None` (`x or default` excepted); conditional expressions `a if c else b` on the same terms, where only the branch taken runs |
-| Membership | `in` / `not in` a literal tuple, list or set of supported constants or Enum members, outside comparison chains |
-| Strings | Equality, inequality, truthiness, membership in finite literal collections, builtin `len(field)`; `startswith()` and `endswith()` with a string or a literal tuple of them; substring `in` / `not in` |
-| Dates | `.year`, `.weekday()` and `.isoweekday()` of a date or datetime; `.hour`, `.minute`, `.second` and `.microsecond` of a datetime or time; `.days`, `.seconds` and `.microseconds` of a timedelta; `.date()` and `.time()` of a datetime |
-| Enums | Equality/inequality within the same Enum type, finite membership, exact member truthiness; a member's `.value` and `.name`, when its type's values share one supported type |
-
-Early returns and nested branches are analyzed as paths. Rejection conditions
-are not blindly negated. The entire relevant validator must be understood;
-partially translating it would risk false claims of impossibility. Operators
-follow Python's parsed precedence, including operand-returning `and` and `or`.
-
-### Unsupported features and fallback
-
-Field types the solver does not model (floats, containers, nested models, UUIDs,
-aware datetimes, other unions, mixed-type Literals, Flags, custom Enum behavior,
-…) become external fields, described above. Unsupported **constructor shapes**
-fail explicitly: Pydantic dataclasses, dataclass `InitVar` / `init=False`
-fields, duplicate aliases, and alias paths through a list that Pydantic cannot
-replace with the field name.
-
-Validator code outside the [language above](#exact-recognized-validator-language)
-is unsupported **validation logic**, for example loops, other calls and string
-methods, `try` and `with`, class, sequence and mapping patterns in `match`,
-mutation, other exception classes and transformed return values. So are async, generator and wrapped validators,
-validators without retrievable source, and these Pydantic features: `before`,
-`plain` or `wrap` validators; legacy validators; Annotated callbacks other than
-a pure `AfterValidator`; other field metadata, such as
-`StringConstraints(to_lower=True)`; transforming model config; custom
-initialization, core schema, attribute hooks and a custom `model_post_init`
-(private attributes are fine); and data-dependent default factories.
+## Unsupported features and fallback
 
 In **strict** mode, unsupported validation logic raises `UnsupportedConstraint`
 when the filler is created. In **auto** mode it appears in
@@ -280,12 +215,6 @@ validators' errors, or with `ValueError` or `AssertionError` from a dataclass's
 including one from a default factory. Validation is not sandboxed: do not use side
 effects or nondeterministic validators. Solver timeouts cannot interrupt Python
 code.
-
-Z3 string values cover U+0000–U+2FFFF, including ordinary text and emoji. Fixed
-strings outside this range are explicitly unsupported. Such literals in a
-validator cause strict rejection or automatic fallback; such defaults are simply
-not preferred, and a `Literal` with such a choice makes its field external.
-Arbitrary Python string behavior is not modeled.
 
 ## Failure categories
 
@@ -355,7 +284,7 @@ field to start with, end with or contain, at the allowed length nearest that, so
 `SKU-sku`, `filename.csv` or `X-code__-Z`; else the strings the rules mention, then
 other fields' string values, so a confirmation field copies its password.
 
-With a [pattern](#string-patterns), every candidate must also match it. When none
+With a [pattern](docs/supported.md#patterns), every candidate must also match it. When none
 of the name's candidates does, modelfill spells a value from the pattern before
 trying strings from elsewhere. If a value can start with the name's first letter,
 it has the allowed length nearest the name's and follows the name as far as the
