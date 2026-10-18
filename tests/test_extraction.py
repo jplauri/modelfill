@@ -29,7 +29,8 @@ def assert_matches_python(validator, fields, grid):
         try:
             validator(SimpleNamespace(**values))
             accepted = True
-        except (ValueError, AssertionError, TypeError):  # TypeError: an operation on None.
+        # TypeError: an operation on None; UnboundLocalError: a local another path sets.
+        except (ValueError, AssertionError, TypeError, UnboundLocalError):
             accepted = False
         assert evaluate(expression, values) is accepted, (validator.__name__, values)
         with solver.session(values):
@@ -146,6 +147,59 @@ def absolute_extremes(self):
     return self
 
 
+def branch_assignment(self):
+    total = self.a
+    if self.b:
+        total = self.b
+    if total > 2:
+        raise ValueError("invalid")
+    return self
+
+
+def branch_locals(self):
+    if self.a > 2:
+        limit = self.b
+    elif self.a < -2:
+        raise ValueError("too low")
+    else:
+        limit = 3
+        if self.b == 1:
+            limit = limit + 1
+    bonus: int = 0
+    if self.b < 0:
+        bonus = -self.b
+    if self.a + limit > 6 + bonus:
+        raise ValueError("over the limit")
+    return self
+
+
+def partly_set(self):
+    if self.a > 0:
+        cap = self.a
+    elif self.a < -1:
+        return self
+    if self.b > cap:  # Unbound when a is 0 or -1: Python raises UnboundLocalError.
+        raise ValueError("over the cap")
+    return self
+
+
+def matching(self):
+    match self.a:
+        case 0 | 1:
+            limit = 1
+        case 2 if self.b > 0:
+            limit = self.b
+        case 3 as three:
+            limit = three + self.b
+        case other if other < 0:
+            raise ValueError("negative")
+        case _:
+            limit = 2
+    if self.b > limit:
+        raise ValueError("over the limit")
+    return self
+
+
 def other_rejections(self):
     if self.a < 0:
         raise AssertionError("negative")
@@ -174,6 +228,10 @@ def other_rejections(self):
         other_rejections,
         conditional_values,
         absolute_extremes,
+        branch_locals,
+        partly_set,
+        branch_assignment,
+        matching,
     ],
 )
 def test_extraction_and_solver_match_python_exhaustively(validator):
@@ -285,6 +343,29 @@ def clock_parts(self):
 def day_and_time(self):
     if self.a.date() == self.d or self.a.time() >= self.b:
         raise ValueError("invalid")
+    return self
+
+
+def matching_none(self):
+    match self.a:
+        case None:
+            return self
+        case True:  # An int is never the True singleton.
+            raise ValueError("unreachable")
+        case 1 | 2 as small if self.b != small:
+            raise ValueError("invalid")
+    return self
+
+
+def matching_flags(self):
+    match self.a:
+        case True:
+            if self.b < 1:
+                raise ValueError("invalid")
+        case False:
+            pass
+        case None if self.b > 1:
+            raise ValueError("invalid")
     return self
 
 
@@ -441,6 +522,12 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
         (optional_values, MAYBE, MAYBE_GRID),
         (optional_unguarded, MAYBE, MAYBE_GRID),
         (optional_chain, MAYBE, MAYBE_GRID),
+        (matching_none, MAYBE, MAYBE_GRID),
+        (
+            matching_flags,
+            {"a": Domain("bool", nullable=True), "b": INT},
+            {"a": [None, False, True], "b": range(-1, 4)},
+        ),
         (date_rules, {"a": Domain("date"), "b": Domain("date")}, {"a": DAYS, "b": DAYS}),
         (module_constants, {"a": Domain("date"), "b": Domain("date")}, {"a": DAYS, "b": DAYS}),
         (schedule_rules, SCHEDULE, SCHEDULE_GRID),
@@ -528,6 +615,55 @@ def test_decimal_arithmetic_needs_digits_python_keeps():
     assert extract_validator(doubled, {"a": Domain("decimal", scale=2, digits=27)})
 
 
+def none_on_a_path(self):
+    limit = 3
+    if self.a > 0:
+        limit = None
+    if self.b == limit:
+        raise ValueError("invalid")
+    return self
+
+
+def mixed_locals(self):
+    if self.a > 0:
+        limit = 3
+    else:
+        limit = "none"
+    if self.b == limit:
+        raise ValueError("invalid")
+    return self
+
+
+def test_locals_set_in_branches_need_one_type_and_no_none():
+    with pytest.raises(UnsupportedConstraint, match="limit may be None on some path"):
+        extract_validator(none_on_a_path, {"a": INT, "b": INT})
+    with pytest.raises(UnsupportedConstraint, match="must have the same type"):
+        extract_validator(mixed_locals, {"a": INT, "b": INT})
+
+
+def capture_after_match(self):
+    match self.a:
+        case other if other > 0:
+            pass
+    if other > 1:  # Bound whenever the case was tried, guard or not.
+        raise ValueError("invalid")
+    return self
+
+
+def class_pattern(self):
+    match self.a:
+        case int(value) if value > 1:
+            raise ValueError("invalid")
+    return self
+
+
+def test_match_patterns_beyond_values_are_unsupported():
+    with pytest.raises(UnsupportedConstraint, match="other is read after the match"):
+        extract_validator(capture_after_match, {"a": INT})
+    with pytest.raises(UnsupportedConstraint, match="unsupported pattern MatchClass"):
+        extract_validator(class_pattern, {"a": INT})
+
+
 def test_dataclass_implicit_and_explicit_returns():
     expression = extract_validator(dataclass_validation, {"a": INT, "b": INT}, kind="dataclass")
     for a, b in itertools.product(range(-1, 3), repeat=2):
@@ -560,15 +696,6 @@ def test_field_validator_reads_only_previous_declared_fields():
 
 def rebinds_self(self):
     self = None
-    return self
-
-
-def branch_assignment(self):
-    total = self.a
-    if self.b:
-        total = self.b
-    if total > 2:
-        raise ValueError("invalid")
     return self
 
 
@@ -684,7 +811,6 @@ def unknown_name(self):
     "validator",
     [
         rebinds_self,
-        branch_assignment,
         mutation,
         loop,
         call,

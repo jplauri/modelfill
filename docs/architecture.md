@@ -58,10 +58,12 @@ values or changes reachability.
 
 Exception messages are not analyzed: they run only on a path that already
 rejects, so their content cannot change acceptance. A failing `assert` rejects
-like `raise`, unless `python -O` removed it. Local assignments must sit at the
-top level of the validator, so every later read sees exactly one binding;
-reassigning a parameter could disguise a transformed return value and is
-unsupported.
+like `raise`, unless `python -O` removed it. A local that branches set differently
+holds, after them, the value of the branch taken: a conditional value the solver
+already models. Where only some paths set it, a read on the others raises
+`UnboundLocalError`, which rejects like the requirements below. `match` is the same
+chain of tests as `if`/`elif`, one per case. Reassigning a parameter could disguise
+a transformed return value and is unsupported.
 
 Python's `and` and `or` return operands. They are logical connectives when their
 results are tested for truth, but `(a or b) == 2` requires conditional operand
@@ -80,7 +82,8 @@ patterns for optional fields exact rather than conservative.
 
 `UnsatisfiableConstraints` means the sound modeled constraints and fixed
 assignments have no solution. The backend establishes this without preferences,
-pinned values or accumulated failed-candidate blocks. modelfill only makes this
+pinned values or accumulated failed-candidate blocks, and the solver's hard domains
+have no arbitrary integer or string-length bounds. modelfill only makes this
 claim when all discovered model behavior is supported. If anything is
 unsupported, it demotes every extracted validator
 predicate to soft guidance, keeps field constraints as candidate bounds, and
@@ -260,7 +263,8 @@ again, in order and without spending attempts, the candidates tried before.
 Reusing a `ModelFiller` avoids repeated analysis. Each thread receives its own
 solver and private Z3 context; only compiled immutable information is shared.
 Compilation and the top-level convenience filler use bounded LRU caches keyed by
-model class.
+model class, so a model, and the Enum classes and constants its validators read,
+must stay unchanged after its first compilation.
 
 ## String patterns
 

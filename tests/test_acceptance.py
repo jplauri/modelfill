@@ -646,6 +646,54 @@ def test_rules_may_read_the_day_and_time_of_a_datetime():
         fill(Visit, arrives=datetime(2025, 1, 1, 8), door=time(9))
 
 
+class Subscription(BaseModel):
+    plan: Literal["pro", "team", "free"]
+    seats: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.plan == "pro":
+            limit = 100
+        elif self.plan == "team":
+            limit = 10
+        else:
+            limit = 1
+        if self.seats > limit:
+            raise ValueError("too many seats for the plan")
+        return self
+
+
+def test_locals_may_be_set_in_branches():
+    # A local set in a branch was unsupported, so strict mode refused this.
+    filler = ModelFiller(Subscription, mode="strict")
+    assert filler.fill(plan="team", seats=10).seats == 10
+    with pytest.raises(UnsatisfiableConstraints):
+        filler.fill(plan="free", seats=2)
+
+
+class Issue(BaseModel):
+    kind: Literal["bug", "feature", "question"]
+    priority: int = Field(ge=1, le=5)
+
+    @model_validator(mode="after")
+    def check(self):
+        match self.kind:
+            case "bug" if self.priority < 3:
+                raise ValueError("bugs are urgent")
+            case "question":
+                if self.priority != 5:
+                    raise ValueError("questions wait")
+        return self
+
+
+def test_validators_may_match():
+    # A match statement was unsupported, so strict mode refused this.
+    issue = ModelFiller(Issue, mode="strict").fill()
+    assert (issue.kind, issue.priority) == ("bug", 3)
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Issue, kind="question", priority=1)
+
+
 class Limited(BaseModel):
     LIMIT: ClassVar[int] = 7
     n: int
