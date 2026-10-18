@@ -229,8 +229,8 @@ def test_fields_without_a_boring_value_need_a_value_or_a_provider():
     assert ModelFiller(Session).explain()["fields"]["token"]["default"] == "required input"
 
 
-class Narrow(BaseModel):
-    price: Decimal = Field(max_digits=2, decimal_places=2, ge=Decimal("0.5"))
+class Narrow(BaseModel):  # Without decimal_places, a Decimal is external.
+    price: Decimal = Field(max_digits=2, ge=Decimal("0.5"), le=Decimal("0.75"))
 
 
 def test_each_batch_member_gets_its_own_provider_values():

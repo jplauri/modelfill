@@ -13,7 +13,9 @@ import math
 import types
 from collections.abc import Callable, Iterable
 from copy import deepcopy
+from decimal import Decimal, getcontext
 from enum import Enum
+from fractions import Fraction
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -66,6 +68,7 @@ from .ir import (
     Domain,
     Expr,
     const,
+    decode,
     encodable,
     evaluate,
     node,
@@ -170,14 +173,17 @@ class Adapter:
                 )
 
 
-def _domain(annotation: Any) -> Domain | None:
-    """The solver domain of a field type, or None for an external field."""
+def _domain(annotation: Any, grid: Domain | None = None) -> Domain | None:
+    """The solver domain of a field type, or None for an external field. A Decimal
+    has the grid its decimal_places set, if any."""
     if annotation in PRIMITIVES:
         return PRIMITIVES[annotation]
+    if annotation is Decimal:
+        return grid
     arguments = get_args(annotation)
     if get_origin(annotation) in (Union, types.UnionType) and type(None) in arguments:
         options = [option for option in arguments if option is not type(None)]
-        inner = _domain(options[0]) if len(options) == 1 else None
+        inner = _domain(options[0], grid) if len(options) == 1 else None
         return None if inner is None else dataclasses.replace(inner, nullable=True)
     if inspect.isclass(annotation) and issubclass(annotation, Enum) and plain_enum(annotation):
         return Domain("enum", tuple(annotation)) if len(annotation) else None
@@ -264,14 +270,44 @@ def _input_path(name: str, alias: Any, by_alias: bool, by_name: bool) -> tuple[s
     raise UnsupportedConstraint(f"Field {name!r}: an alias path through a list is unsupported")
 
 
+def _settings(item: Any) -> set[str]:
+    """The options set in Pydantic's general metadata."""
+    return {key for key, value in vars(item).items() if value is not None and value is not False}
+
+
 def _pattern(item: Any) -> Any:
     """The pattern in Pydantic's general metadata, if nothing else there applies."""
     if type(item) is not _GENERAL:
         return None
-    settings = {
-        key for key, value in vars(item).items() if value is not None and value is not False
-    }
-    return item.pattern if settings == {"pattern"} else None
+    return item.pattern if _settings(item) == {"pattern"} else None
+
+
+def _grid(metadata: list[Any]) -> Domain | None:
+    """The domain of a Decimal that decimal_places puts on a grid. The last of each
+    setting holds, as in Pydantic, and fewer digits than places bound the places too:
+    max_digits=2 with decimal_places=3 allows 0.99 but not 0.099."""
+    settings: dict[str, Any] = {}
+    for item in metadata:
+        if type(item) is _GENERAL:
+            settings |= {key: value for key, value in vars(item).items() if value is not None}
+    places, digits = settings.get("decimal_places"), settings.get("max_digits")
+    if type(places) is not int or places < 0:
+        return None
+    if digits is not None and (type(digits) is not int or digits < 1):
+        return None
+    return Domain("decimal", scale=places if digits is None else min(places, digits), digits=digits)
+
+
+def _exact(number: Any, kind: str) -> Fraction | None:
+    """A finite numeric constraint's exact value. For a Decimal, Pydantic reads a float
+    as its repr, so ge=0.1 allows 0.1; an int is compared with the float itself."""
+    if type(number) is float and math.isfinite(number):
+        return Fraction(repr(number) if kind == "decimal" else number)
+    if type(number) is int or (
+        kind == "decimal" and type(number) is Decimal and number.is_finite()
+    ):
+        return Fraction(number)
+    return None
 
 
 def _metadata_constraints(
@@ -302,23 +338,47 @@ def _metadata_constraints(
                 continue
             remainder = node("mod", expression, const(step), sort=INT)
             result.append((f"{name} % {step} == 0", node("eq", remainder, const(0))))
-        elif isinstance(item, (Gt, Ge, Lt, Le)) and domain.kind == "int":
+        elif isinstance(item, (Gt, Ge, Lt, Le)) and domain.kind in ("int", "decimal"):
             bound = getattr(item, type(item).__name__.lower())
-            if type(bound) not in (int, float) or (
-                type(bound) is float and not math.isfinite(bound)
-            ):
+            exact = _exact(bound, domain.kind)
+            if exact is None:
                 unsupported.append(f"Field {name!r}: unsupported numeric bound {bound!r}")
                 continue
+            units = exact * 10**domain.scale  # The bound's place on the grid.
             if isinstance(item, Gt):
-                operation, value = "ge", math.floor(bound) + 1
+                operation, value = "ge", math.floor(units) + 1
             elif isinstance(item, Ge):
-                operation, value = "ge", math.ceil(bound)
+                operation, value = "ge", math.ceil(units)
             elif isinstance(item, Lt):
-                operation, value = "le", math.ceil(bound) - 1
+                operation, value = "le", math.ceil(units) - 1
             else:
-                operation, value = "le", math.floor(bound)
+                operation, value = "le", math.floor(units)
             label = f"{name} {_SYMBOLS[type(item)]} {bound!r}"
-            result.append((label, node(operation, expression, const(value))))
+            limit = const(decode(domain.kind, value, domain.scale))
+            result.append((label, node(operation, expression, limit)))
+        elif isinstance(item, MultipleOf) and domain.kind == "decimal":
+            step = _exact(item.multiple_of, "decimal")
+            if step is None or step <= 0:
+                unsupported.append(f"Field {name!r}: unsupported multiple_of {item.multiple_of!r}")
+                continue
+            # A multiple's units are multiples of these: 0.25 on a grid of tenths leaves
+            # multiples of 0.5.
+            units = step * 10**domain.scale
+            divisor = const(decode("decimal", units.numerator, domain.scale))
+            remainder = node("mod", expression, divisor, sort=Domain("decimal", scale=domain.scale))
+            # Pydantic divides by the step in the context's precision: a quotient past it
+            # rounds, and may pass without being a multiple, so Pydantic decides those.
+            edge = math.ceil(Fraction(10 ** (getcontext().prec - 1), units.denominator))
+            rule = node(
+                "or",
+                node("ge", expression, const(decode("decimal", edge, domain.scale))),
+                node("le", expression, const(decode("decimal", -edge, domain.scale))),
+                node("eq", remainder, const(Decimal(0))),
+            )
+            result.append((f"{name} % {item.multiple_of} == 0", rule))
+        elif domain.kind == "decimal" and type(item) is _GENERAL:  # The domain holds these.
+            if not _settings(item) <= {"max_digits", "decimal_places"}:
+                unsupported.append(f"Field {name!r}: unsupported metadata {item!r}")
         elif isinstance(item, (MinLen, MaxLen)) and domain.kind == "str":
             minimum = isinstance(item, MinLen)
             value = item.min_length if minimum else item.max_length
@@ -332,6 +392,12 @@ def _metadata_constraints(
             pattern = found  # Only checked: it never transforms a value.
         else:
             unsupported.append(f"Field {name!r}: unsupported metadata {item!r}")
+    if domain.digits is not None:  # Pydantic counts digits: |units| < 10**max_digits.
+        low, high = (
+            const(decode("decimal", sign * 10**domain.digits, domain.scale)) for sign in (-1, 1)
+        )
+        within = node("and", node("lt", low, expression), node("lt", expression, high))
+        result.append((f"{name} has at most {domain.digits} digits", within))
     if domain.nullable:  # Pydantic applies these constraints to non-None values only.
         result = [(label, node("or", node("isnone", expression), rule)) for label, rule in result]
     return result, pattern
@@ -445,7 +511,6 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
     by_name = bool(config.get("validate_by_name") or config.get("populate_by_name"))
     for index, (name, info) in enumerate(model.model_fields.items()):
         annotation, inherited = _resolve(info.annotation)
-        domain = _domain(annotation)
         input_path = _input_path(name, info.validation_alias, by_alias, by_name)
         factory = info.default_factory
         if info.default_factory_takes_validated_data:  # None without a factory.
@@ -467,6 +532,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         # Unlike a constraint of one kind, every one of them runs.
         checks = [item.func for item in metadata if isinstance(item, AfterValidator)]
         metadata = [item for item in metadata if not isinstance(item, AfterValidator)]
+        domain = _domain(annotation, _grid(metadata))
         validators += [
             ValidatorSpec(
                 getattr(check, "__name__", repr(check)),

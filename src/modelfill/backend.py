@@ -29,8 +29,18 @@ _INTEGERS = {
     "date": (encode(date(2025, 1, 1)), 1, 365),
     "datetime": (encode(datetime(2025, 1, 1)), 60_000_000, 525_600),
     "time": (0, 60_000_000, 1_440),  # Midnight, by the minute over a day.
+    "decimal": (0, 1, 100),  # Units of the field's scale.
     "timedelta": (0, 60_000_000, 10_080),
 }
+
+
+def _aligned(terms: Sequence[Any], exprs: Sequence[Expr]) -> list[Any]:
+    """Numbers' terms in units of the finest decimal grid among them; an int's is 1."""
+    scale = max(expr.sort.scale for expr in exprs)
+    return [
+        term * 10 ** (scale - expr.sort.scale) if expr.sort.scale < scale else term
+        for term, expr in zip(terms, exprs, strict=True)
+    ]
 
 
 def _show(value: Any) -> str:
@@ -111,7 +121,7 @@ class Solver:
         if domain.kind == "enum":
             return z3.IntVal(list(type(value)).index(value), self.context)
         if domain.kind in _INTEGERS:
-            return z3.IntVal(encode(value), self.context)
+            return z3.IntVal(encode(value, domain.scale), self.context)
         if domain.kind == "bool":
             return z3.BoolVal(value, self.context)
         if domain.kind == "str":
@@ -152,8 +162,11 @@ class Solver:
         }:
             kinds = [arg.sort.kind for arg in expr.args]
             # Python bool is numeric in comparisons/arithmetic, but Z3 Bool is not.
-            if set(kinds) <= {"int", "bool"}:
+            if set(kinds) <= {"int", "bool", "decimal"}:
                 args = [z3.If(arg, 1, 0) if z3.is_bool(arg) else arg for arg in args]
+            # Decimals line up on the finer grid; a product's units just multiply.
+            if "decimal" in kinds and op != "mul":
+                args = _aligned(args, expr.args)
             if "date" in kinds and "timedelta" in kinds:
                 # date ± timedelta moves by whole days: timedelta.days rounds down.
                 args = [
@@ -171,6 +184,8 @@ class Solver:
         if op == "not":
             return z3.Not(args[0])
         if op == "ite":
+            if expr.sort.kind == "decimal":  # Both branches on the result's grid.
+                args = [args[0], *_aligned(args[1:], expr.args[1:])]
             return z3.If(*args)
         if op == "len":
             return z3.Length(args[0])
@@ -335,7 +350,7 @@ class Solver:
             return not self.fits(self.equal(name, False))
         if domain.kind in _INTEGERS:
             anchor = _INTEGERS[domain.kind][0]
-            return decode(domain.kind, self.nearest(self.variables[name], anchor))
+            return decode(domain.kind, self.nearest(self.variables[name], anchor), domain.scale)
         return self.text(name, known)
 
     def canonical(
@@ -397,7 +412,8 @@ class Solver:
 
     def integer_target(self, name: str, reference: Any, rng: random.Random) -> Any:
         """A random target for an integer-encoded field: an edge, a value in range, or nearby."""
-        kind = self.domains[name].kind
+        domain = self.domains[name]
+        kind = domain.kind
         anchor, step, spread = _INTEGERS[kind]
         low, high = self.ranges.get(name, (None, None))
         roll = rng.random()
@@ -412,7 +428,7 @@ class Solver:
         elif high is not None:
             target = high - step * rng.randint(0, spread)
         else:
-            near = anchor if reference is None else encode(reference)
+            near = anchor if reference is None else encode(reference, domain.scale)
             target = rng.choice(
                 [
                     near + step * rng.randint(-10, 10),
@@ -421,7 +437,7 @@ class Solver:
             )
         if kind in BOUNDS:  # Stay within what Python can represent.
             target = min(max(target, BOUNDS[kind][0]), BOUNDS[kind][1])
-        return decode(kind, target)
+        return decode(kind, target, domain.scale)
 
     def values(self) -> dict[str, Any]:
         model = self.engine.model()
@@ -439,7 +455,7 @@ class Solver:
                 assert domain.choices is not None
                 result[name] = tuple(type(domain.choices[0]))[value.as_long()]
             elif domain.kind in _INTEGERS:
-                result[name] = decode(domain.kind, value.as_long())
+                result[name] = decode(domain.kind, value.as_long(), domain.scale)
             else:
                 # One pass preserves literal text such as backslash-u-brace-41.
                 result[name] = re.sub(

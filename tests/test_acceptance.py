@@ -4,6 +4,7 @@ import random
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 from enum import Enum
 from itertools import product
 from typing import Annotated, ClassVar, Literal, NewType, get_args
@@ -410,6 +411,89 @@ def test_times_are_solved():
     assert (filler.fill().opens, filler.fill().closes) == (time(8), time(8, 0, 0, 1))
     with pytest.raises(UnsatisfiableConstraints):  # Nothing comes after the last instant.
         filler.fill(opens=time(23, 59, 59, 999999))
+
+
+class Bill(BaseModel):
+    price: Decimal = Field(max_digits=4, decimal_places=2, ge=Decimal("0.5"))
+    discount: Decimal = Field(decimal_places=1, multiple_of=Decimal("0.25"), gt=0)
+    rate: Decimal = Field(decimal_places=1, ge=0.1)  # A float bound reads as its repr.
+    tiny: Decimal = Field(max_digits=2, decimal_places=3, gt=Decimal("0.0985"))
+
+
+def test_decimals_with_decimal_places_are_solved():
+    # Each was an external field, and the boring values of discount and tiny broke
+    # their places.
+    bill = ModelFiller(Bill, mode="strict").fill()
+    values = (bill.price, bill.discount, bill.rate, bill.tiny)
+    assert [str(value) for value in values] == ["0.50", "0.5", "0.1", "0.10"]
+    with pytest.raises(UnsatisfiableConstraints, match="price has at most 4 digits"):
+        fill(Bill, price=Decimal("100.00"))
+    with pytest.raises(TypeError, match="canonical decimal value"):  # Off the grid.
+        fill(Bill, price=Decimal("1.234"))
+
+
+class Settled(BaseModel):
+    paid: Decimal = Field(decimal_places=2)
+    owed: Decimal = Field(decimal_places=1)
+    cash: bool
+
+    @model_validator(mode="after")
+    def check(self):
+        if (self.paid if self.cash else self.owed) != 1:
+            raise ValueError("one must be settled")
+        return self
+
+
+def test_decimal_rules_compare_values_across_grids():
+    # A Decimal equal to an int was taken as never equal, and owed 1.0 as 10 tenths.
+    settled = ModelFiller(Settled, mode="strict").fill()
+    assert (settled.paid, settled.owed, settled.cash) == (0, 1, False)
+
+
+class Quote(BaseModel):
+    FLOOR: ClassVar[Decimal] = Decimal("9.99")
+    price: Decimal = Field(decimal_places=2)
+    fee: Decimal = Field(decimal_places=1, ge=0)
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.price < self.FLOOR or not self.fee or max(self.price, self.fee) > Decimal(10):
+            raise ValueError("the price is too low, or the fee missing")
+        return self
+
+
+def test_decimal_rules_order_and_test_values():
+    # Ordering decimals was unsupported, and so was a Decimal constant.
+    quote = ModelFiller(Quote, mode="strict").fill()
+    assert (str(quote.price), str(quote.fee)) == ("9.99", "0.1")
+
+
+class Taxed(BaseModel):
+    price: Decimal = Field(max_digits=8, decimal_places=2, gt=0)
+    tax: Decimal = Field(max_digits=8, decimal_places=2)
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.price * Decimal("0.25") != self.tax:
+            raise ValueError("the tax must be a quarter of the price")
+        return self
+
+
+def test_decimal_arithmetic_is_exact():
+    # Decimal arithmetic was unsupported. A quarter of 0.01, 0.02 or 0.03 has no cents.
+    taxed = ModelFiller(Taxed, mode="strict").fill()
+    assert (str(taxed.price), str(taxed.tax)) == ("0.04", "0.01")
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Taxed, price=Decimal("0.05"))
+
+
+class Vast(BaseModel):  # The quotients here are past Decimal's 28 digits.
+    x: Decimal = Field(decimal_places=1, multiple_of=1, gt=Decimal("1E+27"), lt=10**27 + 1)
+
+
+def test_multiples_past_the_precision_are_left_to_pydantic():
+    # No tenth here is a whole number, but Pydantic's rounded division passes one.
+    assert ModelFiller(Vast, mode="strict").fill().x == Decimal(f"{10**27}.1")
 
 
 class Limited(BaseModel):

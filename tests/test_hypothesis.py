@@ -3,6 +3,7 @@
 import random
 import re
 from datetime import datetime, timedelta
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from hypothesis import find, given, settings
@@ -76,6 +77,18 @@ def test_exploration_spreads_over_the_feasible_range_and_its_edges():
     for values in ({wide.amount for wide in wides}, {wide.optional for wide in wides} - {None}):
         assert {1000, 1_000_000} <= values
         assert len(values) > 40
+
+
+class Priced(BaseModel):
+    price: Decimal = Field(max_digits=4, decimal_places=2, ge=Decimal("0.5"))
+
+
+def test_explored_decimals_stay_on_their_grid_and_reach_its_edges():
+    filler, rng = ModelFiller(Priced), random.Random(0)  # The sampler behind from_model.
+    prices = {filler._complete({}, 1, rng)[0].price for _ in range(100)}
+    assert {Decimal("0.50"), Decimal("99.99")} <= prices  # The bound, and max_digits.
+    assert all(price.as_tuple().exponent == -2 for price in prices)
+    assert len(prices) > 40
 
 
 class Tagged(BaseModel):
