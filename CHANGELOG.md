@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
+
+Rules may read much more: `Decimal` fields with `decimal_places`, string methods,
+years, weekdays and clock parts, and validators may set locals in branches and use
+`match`. Lists, tuples, dicts and unions of models fill too, and the README is
+reorganized, with every supported form listed in `docs/supported.md`.
 
 ### Breaking changes
 
