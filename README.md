@@ -176,7 +176,7 @@ filler.explain()  # fresh JSON-friendly dictionary
 
 | Area | Support |
 | --- | --- |
-| Pydantic | v2 `BaseModel` and `RootModel`, inherited validators, scalar fields |
+| Pydantic | v2 `BaseModel` and `RootModel`, with inherited validators |
 | Dataclasses | Standard dataclasses, including frozen and slotted classes; pure `__post_init__`, when the generated `__init__` calls it (a subclass that is not decorated again never runs its own) |
 | Types | Exact `int`, `bool`, `str`, `date`, naive `datetime`, naive `time`, `timedelta`; `Decimal` with `decimal_places`; ordinary `Enum`, `IntEnum`, `StrEnum`; homogeneous `Literal` subsets; any of these `\| None` (`Optional`, or `None` inside a `Literal`), also behind a `NewType`, a `type` alias or an `Annotated` inside the `Optional`, whose constraints apply; other types as [external fields](#fields-the-solver-does-not-model) |
 | Numeric metadata | Integer, decimal, date, datetime and timedelta `Field(gt, ge, lt, le)`, respecting strict and inclusive bounds; integer and decimal `Field(multiple_of)`; a decimal's `max_digits` and `decimal_places`, exactly as Pydantic counts them; on optional fields they constrain non-None values, as in Pydantic |
@@ -250,8 +250,8 @@ replace with the field name.
 
 Validator code outside the [language above](#exact-recognized-validator-language)
 is unsupported **validation logic**, for example loops, other calls and string
-methods, `try`, `with` and `match`, mutation, other exception classes and
-transformed return values. So are async, generator and wrapped validators,
+methods, `try` and `with`, class, sequence and mapping patterns in `match`,
+mutation, other exception classes and transformed return values. So are async, generator and wrapped validators,
 validators without retrievable source, and these Pydantic features: `before`,
 `plain` or `wrap` validators; legacy validators; Annotated callbacks other than
 a pure `AfterValidator`; other field metadata, such as
@@ -451,7 +451,7 @@ assert (filler.fill().id, filler.fill().customer.id) == (UUID(int=7), UUID(int=9
 | `float`, `Decimal` without `decimal_places` | `0`, or the whole number nearest 0 that the bounds allow (`gt=0` gives `1.0`) |
 | `int \| str` and other unions | the first member's boring value |
 | `UUID`, `UUID4`, … | `00000000-0000-4000-8000-000000000000`, with the version bits the annotation asks for |
-| `bytes`, `time`, `AwareDatetime` | `b""`, `time(0, 0)`, 2025-01-01 00:00 UTC |
+| `bytes`, `AwareDatetime` | `b""`, 2025-01-01 00:00 UTC |
 | `PastDate`, `FutureDate` | 2000-01-01 and 2100-01-01, fixed so canonical values stay put; `PastDatetime` and `FutureDatetime` likewise at midnight |
 | `list[M]`, `tuple[M, ...]`, `dict[K, M]` of models | as many canonical completions of `M` as `min_length` asks, each a new object, under the keys above |
 | `A \| B` of models | the first member that fills, in declaration order: a tagged union's first branch, whose tag is the one value its `Literal` allows |
