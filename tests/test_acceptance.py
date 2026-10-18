@@ -468,6 +468,25 @@ def test_decimal_rules_order_and_test_values():
     assert (str(quote.price), str(quote.fee)) == ("9.99", "0.1")
 
 
+class Taxed(BaseModel):
+    price: Decimal = Field(max_digits=8, decimal_places=2, gt=0)
+    tax: Decimal = Field(max_digits=8, decimal_places=2)
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.price * Decimal("0.25") != self.tax:
+            raise ValueError("the tax must be a quarter of the price")
+        return self
+
+
+def test_decimal_arithmetic_is_exact():
+    # Decimal arithmetic was unsupported. A quarter of 0.01, 0.02 or 0.03 has no cents.
+    taxed = ModelFiller(Taxed, mode="strict").fill()
+    assert (str(taxed.price), str(taxed.tax)) == ("0.04", "0.01")
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Taxed, price=Decimal("0.05"))
+
+
 class Vast(BaseModel):  # The quotients here are past Decimal's 28 digits.
     x: Decimal = Field(decimal_places=1, multiple_of=1, gt=Decimal("1E+27"), lt=10**27 + 1)
 

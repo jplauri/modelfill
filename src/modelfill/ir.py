@@ -151,7 +151,8 @@ def const(value: Any) -> Expr:
     if isinstance(value, Enum):
         domain = Domain("enum", tuple(type(value)))
     elif isinstance(value, Decimal):  # On its own grid: Decimal("1.50") counts hundredths.
-        domain = Domain("decimal", scale=max(0, -int(value.as_tuple().exponent)))
+        scale = max(0, -int(value.as_tuple().exponent))
+        domain = Domain("decimal", scale=scale, digits=len(str(abs(encode(value, scale)))))
     else:
         domain = NONE if value is None else PRIMITIVES[type(value)]
     return Expr("const", domain, value=value)

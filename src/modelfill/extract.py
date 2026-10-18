@@ -61,8 +61,8 @@ _OPERATORS = {
     ast.FloorDiv: "floordiv",
 }
 
-# Result kinds of supported arithmetic, following Python's int and datetime rules.
-# Booleans count as integers. To stay linear, * needs an integer literal operand,
+# Result kinds of supported arithmetic, following Python's int, Decimal and datetime
+# rules. Booleans count as integers. To stay linear, * needs a literal number operand,
 # and % and // a positive integer literal divisor (where Python and Z3 agree).
 _ARITHMETIC: dict[tuple[str, str, str], Kind] = {
     ("add", "int", "int"): "int",
@@ -82,6 +82,10 @@ _ARITHMETIC: dict[tuple[str, str, str], Kind] = {
     ("add", "timedelta", "date"): "date",
     ("sub", "date", "timedelta"): "date",
     ("sub", "date", "date"): "timedelta",
+} | {  # A Decimal takes an int exactly.
+    (operation, left, right): "decimal"
+    for operation in ("add", "sub", "mul")
+    for left, right in (("decimal", "decimal"), ("decimal", "int"), ("int", "decimal"))
 }
 
 
@@ -154,6 +158,21 @@ class _Analyzer:
         if value.sort.nullable:
             self.requires.append(_not(node("isnone", value)))
         return value
+
+    def digits(self, value: Expr, scale: int, syntax: ast.AST) -> int:
+        """At most how many digits a number has in units of 10**-scale, which decimal
+        arithmetic needs to know."""
+        digits = _digits(value, scale)
+        if digits is None:
+            raise self.unsupported(syntax, "decimal arithmetic needs max_digits on its fields")
+        return digits
+
+    def exact(self, scale: int, digits: int, syntax: ast.AST) -> Domain:
+        """A decimal result's sort, when Python computes it without rounding: Decimal
+        arithmetic rounds a result past the context's precision."""
+        if digits > decimal.getcontext().prec:
+            raise self.unsupported(syntax, "decimal arithmetic could round past the precision")
+        return Domain("decimal", scale=scale, digits=digits)
 
     def in_range(self, value: Expr) -> Expr:
         """Date and time arithmetic past Python's limits raises OverflowError."""
@@ -430,9 +449,17 @@ class _Analyzer:
                 return _not(self.truth(syntax.operand))
             operand = self.present(self.expression(syntax.operand))
             kind = "int" if operand.sort.kind == "bool" else operand.sort.kind
-            if kind not in ("int", "timedelta") or not isinstance(syntax.op, (ast.UAdd, ast.USub)):
-                raise self.unsupported(syntax, "unary + and - need integers or timedeltas")
+            if kind not in ("int", "timedelta", "decimal") or not isinstance(
+                syntax.op, (ast.UAdd, ast.USub)
+            ):
+                raise self.unsupported(syntax, "unary + and - need numbers or timedeltas")
             negate = isinstance(syntax.op, ast.USub)
+            if kind == "decimal":  # Both round to the context's precision, as abs() does.
+                scale = operand.sort.scale
+                sort = self.exact(scale, self.digits(operand, scale, syntax), syntax)
+                if operand.op == "const":
+                    return const(-operand.value if negate else +operand.value)
+                return node("neg", operand, sort=sort) if negate else operand
             if operand.op == "const" and kind == "int":
                 return const(-operand.value if negate else +operand.value)
             if negate:
@@ -443,7 +470,9 @@ class _Analyzer:
             left = self.present(self.expression(syntax.left))
             right = self.present(self.expression(syntax.right))
             operation = _OPERATORS.get(type(syntax.op))
-            literal = any(side.op == "const" and type(side.value) is int for side in (left, right))
+            literal = any(
+                side.op == "const" and type(side.value) in (int, Decimal) for side in (left, right)
+            )
             divisor = right.op == "const" and type(right.value) is int and right.value > 0
             allowed = {"mul": literal, "mod": divisor, "floordiv": divisor}.get(operation, True)
             kinds = (
@@ -452,9 +481,20 @@ class _Analyzer:
             result = _ARITHMETIC.get((operation, *kinds)) if operation and allowed else None
             if operation is None or result is None:
                 raise self.unsupported(
-                    syntax, "only +, -, * by an integer literal and % or // by a positive one"
+                    syntax, "only +, -, * by a literal number and % or // by a positive integer"
                 )
-            return self.in_range(node(operation, left, right, sort=Domain(result)))
+            sort = Domain(result)
+            if result == "decimal":
+                if operation == "mul":  # The units multiply, and so do the grids.
+                    scale = left.sort.scale + right.sort.scale
+                    digits = sum(
+                        self.digits(side, side.sort.scale, syntax) for side in (left, right)
+                    )
+                else:  # On the finer grid, with at most one digit more.
+                    scale = max(left.sort.scale, right.sort.scale)
+                    digits = max(self.digits(side, scale, syntax) for side in (left, right)) + 1
+                sort = self.exact(scale, digits, syntax)
+            return self.in_range(node(operation, left, right, sort=sort))
         if isinstance(syntax, ast.BoolOp):
             conjunction = isinstance(syntax.op, ast.And)
             values: list[Expr] = []
@@ -511,9 +551,13 @@ class _Analyzer:
                         raise self.unsupported(syntax, "invalid Decimal() constant") from exc
             elif function is abs and len(syntax.args) == 1 and not syntax.keywords:
                 value = self.present(self.expression(syntax.args[0]))
-                if value.sort.kind == "int":
-                    negated = node("neg", value, sort=INT)
-                    return node("ite", node("ge", value, const(0)), value, negated, sort=INT)
+                if value.sort.kind in ("int", "decimal"):
+                    sort = INT
+                    if value.sort.kind == "decimal":
+                        scale = value.sort.scale
+                        sort = self.exact(scale, self.digits(value, scale, syntax), syntax)
+                    negated = node("neg", value, sort=sort)
+                    return node("ite", node("ge", value, const(0)), value, negated, sort=sort)
             elif function in (min, max) and len(syntax.args) > 1 and not syntax.keywords:
                 values = [self.present(self.expression(argument)) for argument in syntax.args]
                 kind = values[0].sort.kind
@@ -696,8 +740,21 @@ def _numbers(values: Sequence[Expr]) -> Domain | None:
     Python compares them by value, on the finest grid among them."""
     kinds = {value.sort.kind for value in values}
     if "decimal" in kinds and kinds <= {"int", "decimal"}:
-        return Domain("decimal", scale=max(value.sort.scale for value in values))
+        scale = max(value.sort.scale for value in values)
+        digits = [_digits(value, scale) for value in values]
+        known = [count for count in digits if count is not None]
+        return Domain("decimal", scale=scale, digits=max(known) if known == digits else None)
     return None
+
+
+def _digits(value: Expr, scale: int) -> int | None:
+    """At most how many digits a number has in units of 10**-scale, or None when it is
+    unbounded, as an int field is."""
+    if value.sort.kind == "bool":
+        return scale + 1
+    if value.sort.kind == "int":
+        return len(str(abs(value.value))) + scale if value.op == "const" else None
+    return None if value.sort.digits is None else value.sort.digits + scale - value.sort.scale
 
 
 def extract_validator(

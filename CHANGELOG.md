@@ -21,6 +21,11 @@
   `min()` or `max()` of them, and a conditional or `and`/`or` value may be a
   decimal or an integer. Finite `Decimal` constants are read, and so are
   `Decimal(…)` calls of a string or integer literal, `decimal.Decimal(…)` too.
+- Validators may add and subtract decimals, negate one or take its `abs()`, and
+  multiply one by a literal number, exactly: each decimal they read needs
+  `max_digits`, and every result must fit the decimal context's precision, 28
+  digits by default, so Python never rounds it. Other decimal arithmetic remains
+  unsupported logic.
 - Lists, tuples and dicts of models, and unions of models, are filled instead of
   getting no value: each element is the model's canonical completion, made anew,
   as many as `min_length` asks, and a union gets its first member that fills, so a

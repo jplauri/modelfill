@@ -236,6 +236,14 @@ def decimal_comparisons(self):
     return self
 
 
+def decimal_arithmetic(self):
+    if self.a + self.b * 2 > Decimal("3.5") or -self.a == self.b - 1:
+        raise ValueError("invalid")
+    if abs(self.a - self.b) < Decimal("0.25") or self.a * Decimal("1.5") == 3 - True:
+        raise ValueError("invalid")
+    return self
+
+
 def boolean_numbers(self):
     if self.a == self.b and self.a + self.b > 1:
         raise ValueError("invalid")
@@ -307,6 +315,7 @@ def unreachable_code(self):
 
 
 PRICES = {"a": Domain("decimal", scale=2), "b": Domain("decimal", scale=1)}
+LEDGER = {"a": Domain("decimal", scale=2, digits=4), "b": Domain("decimal", scale=1, digits=3)}
 PRICE_GRID = {  # Hundredths and tenths, compared by value.
     "a": [Decimal(text) for text in ("-0.10", "0.00", "0.05", "0.40", "1.00", "1.25")],
     "b": [Decimal(text) for text in ("-0.5", "0.0", "0.4", "1.0", "2.0")],
@@ -338,6 +347,7 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
         (module_constants, {"a": Domain("date"), "b": Domain("date")}, {"a": DAYS, "b": DAYS}),
         (schedule_rules, SCHEDULE, SCHEDULE_GRID),
         (decimal_comparisons, PRICES, PRICE_GRID),
+        (decimal_arithmetic, LEDGER, PRICE_GRID),
         (boolean_numbers, {"a": BOOL, "b": INT}, {"a": (False, True), "b": range(-1, 3)}),
         (text_conditions, {"a": STR, "b": STR}, {"a": TEXTS, "b": TEXTS}),
         (enum_validation, {"a": COLORS, "b": NUMBERS}, {"a": Color, "b": Number}),
@@ -370,6 +380,21 @@ def not_a_number(self):
 def test_only_finite_decimal_constants_are_read():
     with pytest.raises(UnsupportedConstraint, match="only finite Decimal constants"):
         extract_validator(not_a_number, PRICES)
+
+
+def doubled(self):
+    if self.a * 2 > 1:
+        raise ValueError("invalid")
+    return self
+
+
+def test_decimal_arithmetic_needs_digits_python_keeps():
+    # Python rounds a Decimal result past its precision, which the solver cannot model.
+    with pytest.raises(UnsupportedConstraint, match="needs max_digits"):
+        extract_validator(doubled, PRICES)
+    with pytest.raises(UnsupportedConstraint, match="round past the precision"):
+        extract_validator(doubled, {"a": Domain("decimal", scale=2, digits=28)})
+    assert extract_validator(doubled, {"a": Domain("decimal", scale=2, digits=27)})
 
 
 def test_dataclass_implicit_and_explicit_returns():
