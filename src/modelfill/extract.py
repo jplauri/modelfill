@@ -292,9 +292,12 @@ class _Analyzer:
 
     def exact(self, scale: int, digits: int, syntax: ast.AST) -> Domain:
         """A decimal result's sort, when Python computes it without rounding: Decimal
-        arithmetic rounds a result past the context's precision."""
-        if digits > decimal.getcontext().prec:
-            raise self.unsupported(syntax, "decimal arithmetic could round past the precision")
+        arithmetic rounds a result past the context's precision or exponent limits. The
+        result counts units of 10**-scale in at most digits digits, so its last digit
+        is in place -scale or above, and its first in place digits - scale - 1 or below."""
+        context = decimal.getcontext()
+        if digits > context.prec or -scale < context.Etiny() or digits - scale - 1 > context.Emax:
+            raise self.unsupported(syntax, "decimal arithmetic could round past the context")
         return Domain("decimal", scale=scale, digits=digits)
 
     def in_range(self, value: Expr) -> Expr:

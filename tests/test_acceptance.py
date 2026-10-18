@@ -4,7 +4,7 @@ import random
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from enum import Enum
 from itertools import product
 from typing import Annotated, ClassVar, Literal, NewType, get_args
@@ -494,6 +494,32 @@ class Vast(BaseModel):  # The quotients here are past Decimal's 28 digits.
 def test_multiples_past_the_precision_are_left_to_pydantic():
     # No tenth here is a whole number, but Pydantic's rounded division passes one.
     assert ModelFiller(Vast, mode="strict").fill().x == Decimal(f"{10**27}.1")
+
+
+class Rounded(BaseModel):
+    x: Decimal = Field(max_digits=4, decimal_places=1)
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.x + Decimal("0.01") != self.x:
+            raise ValueError("the cent must round away")
+        return self
+
+
+def test_compilations_follow_the_decimal_context():
+    # A model compiled once, as if in the default context, so this was called
+    # impossible even where two digits of precision round 1.21 back to 1.2.
+    filler, strict = ModelFiller(Rounded), ModelFiller(Rounded, mode="strict")
+    with pytest.raises(UnsatisfiableConstraints):  # Exact: the cent never rounds away.
+        filler.fill(x=Decimal("1.2"))
+    with localcontext(prec=2):
+        assert filler.fill(x=Decimal("1.2")) == fill(Rounded, x=Decimal("1.2"))
+        with pytest.raises(UnsupportedConstraint, match="round past the context"):
+            strict.fill(x=Decimal("1.2"))
+        with pytest.raises(UnsupportedConstraint, match="round past the context"):
+            ModelFiller(Rounded, mode="strict")
+    with pytest.raises(UnsatisfiableConstraints):
+        strict.fill(x=Decimal("1.2"))
 
 
 class Catalog(BaseModel):

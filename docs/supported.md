@@ -169,8 +169,9 @@ parsed precedence.
   literal operand, and `%` and `//` by a positive integer literal.
 - Decimal arithmetic: `+`, `-`, unary `+` and `-`, and `*` with an integer or
   `Decimal` literal operand, integers mixed in. Each decimal read needs
-  `max_digits`, and no result may outgrow the decimal context's precision, so
-  Python never rounds it.
+  `max_digits`, and no result may outgrow the decimal context's precision or
+  exponent limits, so Python never rounds it. A filler compiles anew for each
+  context it fills in.
 - Date arithmetic, by Python's rules: `datetime ± timedelta`, `datetime - datetime`,
   `date ± timedelta` (whole days, like `timedelta.days`), `date - date`,
   `timedelta ± timedelta`, `timedelta * int` literal and `-timedelta`.

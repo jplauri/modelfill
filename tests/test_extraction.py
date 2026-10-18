@@ -607,12 +607,23 @@ def doubled(self):
 
 
 def test_decimal_arithmetic_needs_digits_python_keeps():
-    # Python rounds a Decimal result past its precision, which the solver cannot model.
+    # Python rounds a Decimal result past its context's precision or exponent limits,
+    # which the solver cannot model.
     with pytest.raises(UnsupportedConstraint, match="needs max_digits"):
         extract_validator(doubled, PRICES)
-    with pytest.raises(UnsupportedConstraint, match="round past the precision"):
+    with pytest.raises(UnsupportedConstraint, match="round past the context"):
         extract_validator(doubled, {"a": Domain("decimal", scale=2, digits=28)})
     assert extract_validator(doubled, {"a": Domain("decimal", scale=2, digits=27)})
+    tiny = {"a": Domain("decimal", scale=4, digits=1)}  # Down to 0.0001.
+    large = {"a": Domain("decimal", scale=0, digits=2)}  # Up to 99.
+    with dc.localcontext(prec=4, Emin=0):  # Down to 0.001: 0.0001 * 2 rounds to 0.
+        with pytest.raises(UnsupportedConstraint, match="round past the context"):
+            extract_validator(doubled, tiny)
+        assert extract_validator(doubled, large)
+    with dc.localcontext(Emax=1):  # Up to 99.99...: 99 * 2 overflows.
+        with pytest.raises(UnsupportedConstraint, match="round past the context"):
+            extract_validator(doubled, large)
+        assert extract_validator(doubled, tiny)
 
 
 def none_on_a_path(self):

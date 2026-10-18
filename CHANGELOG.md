@@ -8,6 +8,11 @@
   capture stays bound when its guard fails, so the later case sees the captured
   value, but modelfill read the value from before the match, and could call a
   satisfiable model impossible.
+- Decimal arithmetic follows the Decimal context a fill runs in. A model compiled
+  once, under the context of its first use, so in a `localcontext()` with less
+  precision, a sum that Python rounds was taken as exact, and a satisfiable model
+  could be called impossible. Arithmetic that could pass the context's exponent
+  limits, where Python rounds a tiny result to zero, is unsupported as well.
 
 ## 0.4.0
 

@@ -141,9 +141,13 @@ any size, so validators may compare any decimals, but arithmetic is modeled only
 where digit bounds prove Python exact. Each decimal sort bounds the digits of its
 units: `max_digits` for a field, the count for a constant, one digit more for a
 sum and the digits added for a product. A result that could outgrow the
-precision is unsupported. Pydantic's `multiple_of` divides in that precision too,
-so where a quotient is too large to divide exactly, the rule leaves the value to
-Pydantic, and no UNSAT proof rests on a rounded division.
+precision is unsupported, and so is one that could reach past the context's
+exponent limits, where Python rounds it to a subnormal or zero, or overflows.
+Pydantic's `multiple_of` divides in that precision too, so where a quotient is too
+large to divide exactly, the rule leaves the value to Pydantic, and no UNSAT proof
+rests on a rounded division. All of this holds under the context of compilation
+only, so a filler used under another context, which `localcontext()` or setting
+`getcontext().prec` makes, fills through a twin compiled under that one.
 
 External fields are the exception that makes real models usable. Their values
 come from the caller, a provider, the model's own default, a nested model's
@@ -265,8 +269,9 @@ again, in order and without spending attempts, the candidates tried before.
 Reusing a `ModelFiller` avoids repeated analysis. Each thread receives its own
 solver and private Z3 context; only compiled immutable information is shared.
 Compilation and the top-level convenience filler use bounded LRU caches keyed by
-model class, so a model, and the Enum classes and constants its validators read,
-must stay unchanged after its first compilation.
+model class, and compilation by the Decimal context's limits too, so a model, and
+the Enum classes and constants its validators read, must stay unchanged after its
+first compilation.
 
 ## String patterns
 
