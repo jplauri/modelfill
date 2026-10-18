@@ -230,7 +230,7 @@ the rules and a pattern cannot both hold, though, the result is
 | `None` | `x is None`, `x is not None`, `x == None`, truthiness, `x or default`; an operation that raises `TypeError` on `None` (`x < y`, `x + 1`, `len(x)`) rejects that path, so guard it as Python code does: `x is not None and x < y` |
 | Boolean operations | `and`, `or`, `not`, with Python truthiness and short circuit meaning; operand-valued `and`/`or` when operands have the same supported type, or are decimals and integers, and cannot be `None` (`x or default` excepted); conditional expressions `a if c else b` on the same terms, where only the branch taken runs |
 | Membership | `in` / `not in` a literal tuple, list or set of supported constants or Enum members, outside comparison chains |
-| Strings | Equality, inequality, truthiness, membership in finite literal collections, builtin `len(field)`; `startswith()` and `endswith()` with a string or a literal tuple of them |
+| Strings | Equality, inequality, truthiness, membership in finite literal collections, builtin `len(field)`; `startswith()` and `endswith()` with a string or a literal tuple of them; substring `in` / `not in` |
 | Enums | Equality/inequality within the same Enum type, finite membership, exact member truthiness; a member's `.value` and `.name`, when its type's values share one supported type |
 
 Early returns and nested branches are analyzed as paths. Rejection conditions

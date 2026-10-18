@@ -252,6 +252,12 @@ def affixes(self):
     return self
 
 
+def substrings(self):
+    if "c" in self.a and self.b not in self.a:
+        raise ValueError("invalid")
+    return self
+
+
 def boolean_numbers(self):
     if self.a == self.b and self.a + self.b > 1:
         raise ValueError("invalid")
@@ -360,6 +366,7 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
         (boolean_numbers, {"a": BOOL, "b": INT}, {"a": (False, True), "b": range(-1, 3)}),
         (text_conditions, {"a": STR, "b": STR}, {"a": TEXTS, "b": TEXTS}),
         (affixes, {"a": STR, "b": STR}, {"a": AFFIXED, "b": AFFIXED}),
+        (substrings, {"a": STR, "b": STR}, {"a": AFFIXED, "b": AFFIXED}),
         (enum_validation, {"a": COLORS, "b": NUMBERS}, {"a": Color, "b": Number}),
         (literal_subsets, BLUE_ONLY, {"a": (Color.BLUE,), "b": Color}),
         (enum_operands, ZERO_FIRST, {"a": (Number.ZERO,), "b": Number, "c": Number}),
@@ -393,9 +400,17 @@ def numeric_prefix(self):
     return self
 
 
-def test_affix_methods_need_strings():
+def number_in_text(self):
+    if self.b in self.a:
+        raise ValueError("invalid")
+    return self
+
+
+def test_affix_methods_and_substrings_need_strings():
     with pytest.raises(UnsupportedConstraint, match=r"startswith\(\) needs strings"):
         extract_validator(numeric_prefix, {"a": STR})
+    with pytest.raises(UnsupportedConstraint, match="tuple/list/set or a string"):
+        extract_validator(number_in_text, {"a": STR, "b": INT})
 
 
 def test_only_finite_decimal_constants_are_read():

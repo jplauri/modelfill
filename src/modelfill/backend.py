@@ -193,6 +193,8 @@ class Solver:
             return z3.PrefixOf(args[1], args[0])
         if op == "endswith":
             return z3.SuffixOf(args[1], args[0])
+        if op == "contains":
+            return z3.Contains(args[0], args[1])
         raise UnsupportedConstraint(f"Unknown IR operation: {op}")
 
     @contextmanager

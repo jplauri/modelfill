@@ -515,6 +515,25 @@ def test_rules_may_test_how_strings_start_and_end():
         fill(Catalog, filename="data.json")
 
 
+class Contact(BaseModel):
+    email: str
+    handle: str
+
+    @model_validator(mode="after")
+    def check(self):
+        if "@" not in self.email or " " in self.handle:
+            raise ValueError("an email has an @, and a handle no spaces")
+        return self
+
+
+def test_rules_may_look_for_substrings():
+    # A substring test was unsupported, so strict mode refused this.
+    contact = ModelFiller(Contact, mode="strict").fill()
+    assert "@" in contact.email and " " not in contact.handle
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Contact, handle="two words")
+
+
 class Limited(BaseModel):
     LIMIT: ClassVar[int] = 7
     n: int

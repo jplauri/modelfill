@@ -12,7 +12,8 @@
 ### Added
 
 - Validators may call `startswith()` and `endswith()` on a string, with a string
-  or a literal tuple of them, as in `self.url.startswith(("http://", "https://"))`.
+  or a literal tuple of them, as in `self.url.startswith(("http://", "https://"))`,
+  and test for a substring with `in`, as in `"@" in self.email`.
 - `Decimal` fields with `decimal_places` are solved exactly, as whole numbers of
   their last place: bounds, `multiple_of` and `max_digits` hold as Pydantic checks
   them, a float bound reads as Pydantic reads it (`ge=0.1` allows `0.1`), and the

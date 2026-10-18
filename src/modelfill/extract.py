@@ -647,8 +647,14 @@ class _Analyzer:
             return self.compare(left, right, operation, syntax), right
         if len(syntax.ops) > 1:
             raise self.unsupported(syntax, "membership cannot participate in a chained comparison")
-        if not isinstance(right_syntax, (ast.Tuple, ast.List, ast.Set)):
-            raise self.unsupported(syntax, "membership requires a literal tuple/list/set")
+        if not isinstance(right_syntax, (ast.Tuple, ast.List, ast.Set)):  # A substring?
+            right = self.present(self.expression(right_syntax))
+            if left.sort.kind != "str" or right.sort.kind != "str":
+                raise self.unsupported(
+                    syntax, "membership needs a literal tuple/list/set or a string"
+                )
+            test = node("contains", right, self.present(left))
+            return (_not(test) if isinstance(operation, ast.NotIn) else test), left
         members = [self.expression(member) for member in right_syntax.elts]
         if any(member.op != "const" for member in members):
             raise self.unsupported(
