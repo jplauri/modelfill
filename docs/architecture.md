@@ -58,10 +58,12 @@ values or changes reachability.
 
 Exception messages are not analyzed: they run only on a path that already
 rejects, so their content cannot change acceptance. A failing `assert` rejects
-like `raise`, unless `python -O` removed it. Local assignments must sit at the
-top level of the validator, so every later read sees exactly one binding;
-reassigning a parameter could disguise a transformed return value and is
-unsupported.
+like `raise`, unless `python -O` removed it. A local that branches set differently
+holds, after them, the value of the branch taken: a conditional value the solver
+already models. Where only some paths set it, a read on the others raises
+`UnboundLocalError`, which rejects like the requirements below. `match` is the same
+chain of tests as `if`/`elif`, one per case. Reassigning a parameter could disguise
+a transformed return value and is unsupported.
 
 Python's `and` and `or` return operands. They are logical connectives when their
 results are tested for truth, but `(a or b) == 2` requires conditional operand
