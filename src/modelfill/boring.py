@@ -161,7 +161,8 @@ def boring(annotation: Any, metadata: Sequence[Any] = (), fill: Fill | None = No
 def complete(annotation: Any, given: Any, fill: Fill) -> Any:
     """given, with each dict that stands for a model completed by fill(model, dict): in
     the model's place, as a collection's element or value, or for the first of a
-    union's model members that takes it. The shape stays as given."""
+    union's model members of its shape that takes it. The shape stays as given, and
+    given itself is returned when it has another shape."""
     annotation = _resolve(annotation)[0]
     if nested_model(annotation) is annotation:
         return fill(annotation, given) if isinstance(given, dict) else given
@@ -173,16 +174,20 @@ def complete(annotation: Any, given: Any, fill: Fill) -> Any:
         failures: list[Exception] = []
         for option in members:  # A tagged union's tag rules out the other branches.
             try:
-                return complete(option, given, fill)
+                completed = complete(option, given, fill)
             except (ModelFillError, TypeError, ValueError) as error:
                 failures.append(error)
-        if len(members) < len([option for option in args if option is not type(None)]):
-            return given  # A member without models may take it as it is.
-        raise failures[0]
+                continue
+            if completed is not given:  # A member of another shape returns it as it is.
+                return completed
+        if failures and len(members) == len([arg for arg in args if arg is not type(None)]):
+            raise failures[0]
+        return given  # A member without models, or none of its shape, may take it as it is.
     kind = origin or annotation
     if not args or not isinstance(given, (dict, list, tuple)):
         return given
-    if kind is tuple and args[-1] is not Ellipsis:  # A fixed shape: one per position.
+    # A fixed shape: one per position. Pydantic never reads a dict as a tuple or list.
+    if kind is tuple and args[-1] is not Ellipsis and not isinstance(given, dict):
         if len(given) != len(args):
             return given  # Pydantic rejects the shape.
         return tuple(complete(arg, value, fill) for arg, value in zip(args, given, strict=True))

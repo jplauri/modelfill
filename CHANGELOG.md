@@ -16,6 +16,10 @@
 - A given value of a recursive `type` alias, such as `type Json = dict[str, Json] |
   list[Json] | str | int | bool | None`, is kept, and any dicts in it that stand for
   models are completed, instead of raising `RecursionError`.
+- A given value for a union is completed through a member of its shape, so
+  `Child | list[Child]` completes `[{}]`, and `list[Child] | Child` completes `{}`.
+  The first member with models took any value, and left one of another shape as it
+  was; a fixed-length tuple member read a dict's keys as its items.
 
 ## 0.4.0
 

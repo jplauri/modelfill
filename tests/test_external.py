@@ -403,6 +403,26 @@ def test_recursive_type_aliases_are_read_once():
     assert (document.data, document.catalog) == ({"ok": [1, None]}, {"a": line, "b": {"c": line}})
 
 
+class Alternatives(BaseModel):
+    one_or_many: Line | list[Line]
+    many_or_one: list[Line] | Line
+    pair_or_named: tuple[Line, Line] | dict[str, Line]
+
+
+def test_a_union_completes_a_given_value_through_a_member_of_its_shape():
+    # The first member with models took any value, and left this list, dict and pair of
+    # dicts as they were, or read the dict's keys as the pair.
+    line = Line(sku="sku", quantity=1, id=NIL4)
+    given = fill(Alternatives, one_or_many=[{}], many_or_one={}, pair_or_named={"a": {}, "b": {}})
+    assert (given.one_or_many, given.many_or_one) == ([line], line)
+    assert given.pair_or_named == {"a": line, "b": line}
+    swapped = fill(Alternatives, one_or_many={}, many_or_one=[{}], pair_or_named=[{}, {}])
+    assert (swapped.one_or_many, swapped.many_or_one) == (line, [line])
+    assert swapped.pair_or_named == (line, line)
+    with pytest.raises(ValueError, match="Unknown field"):  # Only the model takes a dict.
+        fill(Alternatives, one_or_many={"size": 1}, many_or_one={}, pair_or_named={})
+
+
 class Van(BaseModel):
     kind: Literal["van"]
     plate: UUID
