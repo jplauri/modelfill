@@ -139,6 +139,9 @@ class _Analyzer:
         self.info_name: str | None = None
         self.local_names: set[str] = set()
         self.bound: dict[str, Expr] = {}
+        # Locals set on some paths only, with the condition that they are: reading one
+        # elsewhere raises UnboundLocalError.
+        self.maybe: dict[str, Expr] = {}
         self.requires: list[Expr] = []
         try:
             found = inspect.getclosurevars(function)
@@ -153,6 +156,51 @@ class _Analyzer:
 
     def resolve(self, name: str) -> Any:
         return _UNRESOLVED if name in self.local_names else self.names.get(name, _UNRESOLVED)
+
+    def fork(
+        self, condition: Expr, yes: list[ast.stmt], no: list[ast.stmt], syntax: ast.AST
+    ) -> tuple[Expr, Expr]:
+        """Two branches from the same locals: the predicates for returning and for going
+        on past them. After them, a local that the branches set differently is the
+        value of the branch taken, and one set by some paths only is unbound on the rest;
+        a branch that never goes on leaves nothing behind."""
+        start = dict(self.bound), dict(self.maybe)
+        yes_return, yes_on = self.block(yes)
+        taken = self.bound, self.maybe
+        self.bound, self.maybe = dict(start[0]), dict(start[1])
+        no_return, no_on = self.block(no)
+        if yes_on == const(False):
+            pass  # The locals are the other branch's.
+        elif no_on == const(False):
+            self.bound, self.maybe = taken
+        else:
+            self.merge(condition, taken, syntax)
+        returned = _or(_and(condition, yes_return), _and(_not(condition), no_return))
+        return returned, _or(_and(condition, yes_on), _and(_not(condition), no_on))
+
+    def merge(
+        self, condition: Expr, taken: tuple[dict[str, Expr], dict[str, Expr]], syntax: ast.AST
+    ) -> None:
+        """Merge the locals of the branch taken when condition holds into the current
+        ones, those of the other branch."""
+        bound, maybe = taken
+        for name in dict.fromkeys([*bound, *self.bound]):
+            yes_set = maybe.get(name, const(True)) if name in bound else const(False)
+            no_set = self.maybe.get(name, const(True)) if name in self.bound else const(False)
+            if name not in self.bound:
+                self.bound[name] = bound[name]
+            elif name in bound and bound[name] != self.bound[name]:
+                yes, no = bound[name], self.bound[name]
+                if any(value.sort.nullable or value.sort.kind == "none" for value in (yes, no)):
+                    raise self.unsupported(syntax, f"{name} may be None on some path")
+                self.bound[name] = self.choice(condition, yes, no, syntax)
+            defined = yes_set
+            if yes_set != no_set:
+                defined = _or(_and(condition, yes_set), _and(_not(condition), no_set))
+            if defined == const(True):
+                self.maybe.pop(name, None)
+            else:
+                self.maybe[name] = defined
 
     def guarded(self, analyze: Callable[..., Any], *args: Any) -> tuple[Any, Expr]:
         """Analyze in isolation; also return the condition for it not to raise."""
@@ -255,7 +303,7 @@ class _Analyzer:
                 raise self.unsupported(function, "classmethod model validators are unsupported")
             self.receiver = names[0]
             self.info_name = names[1] if len(names) == 2 else None
-        accepted, fallthrough = self.block(function.body, top=True)
+        accepted, fallthrough = self.block(function.body)
         if self.kind == "dataclass":
             return _or(accepted, fallthrough)
         if fallthrough != const(False):
@@ -264,7 +312,7 @@ class _Analyzer:
             )
         return accepted
 
-    def block(self, statements: list[ast.stmt], top: bool = False) -> tuple[Expr, Expr]:
+    def block(self, statements: list[ast.stmt]) -> tuple[Expr, Expr]:
         """Return predicates for returning successfully and reaching the next block."""
         accepted, active = const(False), const(True)
         for statement in statements:
@@ -273,18 +321,11 @@ class _Analyzer:
             if isinstance(statement, ast.If):
                 condition, safe = self.guarded(self.truth, statement.test)
                 active = _and(active, safe)  # A test that raises rejects.
-                yes_return, yes_continue = self.block(statement.body)
-                no_return, no_continue = self.block(statement.orelse)
-                accepted = _or(
-                    accepted,
-                    _and(
-                        active, _or(_and(condition, yes_return), _and(_not(condition), no_return))
-                    ),
+                returned, continued = self.fork(
+                    condition, statement.body, statement.orelse, statement
                 )
-                active = _and(
-                    active,
-                    _or(_and(condition, yes_continue), _and(_not(condition), no_continue)),
-                )
+                accepted = _or(accepted, _and(active, returned))
+                active = _and(active, continued)
             elif isinstance(statement, ast.Return):
                 if self.kind == "dataclass":
                     valid = statement.value is None or (
@@ -309,14 +350,12 @@ class _Analyzer:
                 targets = (
                     statement.targets if isinstance(statement, ast.Assign) else [statement.target]
                 )
-                # A binding made inside a branch would be path-dependent; keep them top-level.
-                if not top or len(targets) != 1 or not isinstance(targets[0], ast.Name):
-                    raise self.unsupported(
-                        statement, "only single-name assignments outside branches are supported"
-                    )
+                if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+                    raise self.unsupported(statement, "only single-name assignments are supported")
                 value, safe = self.guarded(self.expression, statement.value)
                 active = _and(active, safe)
                 self.bound[targets[0].id] = value
+                self.maybe.pop(targets[0].id, None)
             elif isinstance(statement, ast.Pass):
                 continue
             elif isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant):
@@ -392,6 +431,8 @@ class _Analyzer:
                     raise self.unsupported(syntax, "a nested model is read only through its fields")
                 return var(self.field_name, self.fields[self.field_name])
             if syntax.id in self.bound:
+                if syntax.id in self.maybe:  # Unset on some paths, where reading raises.
+                    self.requires.append(self.maybe[syntax.id])
                 return self.bound[syntax.id]
             # Named constants are read once, like Enum classes: treat them as immutable.
             value = self.resolve(syntax.id)

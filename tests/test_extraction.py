@@ -29,7 +29,8 @@ def assert_matches_python(validator, fields, grid):
         try:
             validator(SimpleNamespace(**values))
             accepted = True
-        except (ValueError, AssertionError, TypeError):  # TypeError: an operation on None.
+        # TypeError: an operation on None; UnboundLocalError: a local another path sets.
+        except (ValueError, AssertionError, TypeError, UnboundLocalError):
             accepted = False
         assert evaluate(expression, values) is accepted, (validator.__name__, values)
         with solver.session(values):
@@ -146,6 +147,42 @@ def absolute_extremes(self):
     return self
 
 
+def branch_assignment(self):
+    total = self.a
+    if self.b:
+        total = self.b
+    if total > 2:
+        raise ValueError("invalid")
+    return self
+
+
+def branch_locals(self):
+    if self.a > 2:
+        limit = self.b
+    elif self.a < -2:
+        raise ValueError("too low")
+    else:
+        limit = 3
+        if self.b == 1:
+            limit = limit + 1
+    bonus: int = 0
+    if self.b < 0:
+        bonus = -self.b
+    if self.a + limit > 6 + bonus:
+        raise ValueError("over the limit")
+    return self
+
+
+def partly_set(self):
+    if self.a > 0:
+        cap = self.a
+    elif self.a < -1:
+        return self
+    if self.b > cap:  # Unbound when a is 0 or -1: Python raises UnboundLocalError.
+        raise ValueError("over the cap")
+    return self
+
+
 def other_rejections(self):
     if self.a < 0:
         raise AssertionError("negative")
@@ -174,6 +211,9 @@ def other_rejections(self):
         other_rejections,
         conditional_values,
         absolute_extremes,
+        branch_locals,
+        partly_set,
+        branch_assignment,
     ],
 )
 def test_extraction_and_solver_match_python_exhaustively(validator):
@@ -528,6 +568,32 @@ def test_decimal_arithmetic_needs_digits_python_keeps():
     assert extract_validator(doubled, {"a": Domain("decimal", scale=2, digits=27)})
 
 
+def none_on_a_path(self):
+    limit = 3
+    if self.a > 0:
+        limit = None
+    if self.b == limit:
+        raise ValueError("invalid")
+    return self
+
+
+def mixed_locals(self):
+    if self.a > 0:
+        limit = 3
+    else:
+        limit = "none"
+    if self.b == limit:
+        raise ValueError("invalid")
+    return self
+
+
+def test_locals_set_in_branches_need_one_type_and_no_none():
+    with pytest.raises(UnsupportedConstraint, match="limit may be None on some path"):
+        extract_validator(none_on_a_path, {"a": INT, "b": INT})
+    with pytest.raises(UnsupportedConstraint, match="must have the same type"):
+        extract_validator(mixed_locals, {"a": INT, "b": INT})
+
+
 def test_dataclass_implicit_and_explicit_returns():
     expression = extract_validator(dataclass_validation, {"a": INT, "b": INT}, kind="dataclass")
     for a, b in itertools.product(range(-1, 3), repeat=2):
@@ -560,15 +626,6 @@ def test_field_validator_reads_only_previous_declared_fields():
 
 def rebinds_self(self):
     self = None
-    return self
-
-
-def branch_assignment(self):
-    total = self.a
-    if self.b:
-        total = self.b
-    if total > 2:
-        raise ValueError("invalid")
     return self
 
 
@@ -684,7 +741,6 @@ def unknown_name(self):
     "validator",
     [
         rebinds_self,
-        branch_assignment,
         mutation,
         loop,
         call,

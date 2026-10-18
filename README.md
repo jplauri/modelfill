@@ -219,7 +219,7 @@ the rules and a pattern cannot both hold, though, the result is
 
 | Construct | Accepted forms |
 | --- | --- |
-| Statements | `if` / `elif` / `else`, `pass`, string docstrings, `assert`, supported `raise`, supported `return`, single-name local assignments (`x = …`, `x: T = …`) outside branches, other than to validator parameters |
+| Statements | `if` / `elif` / `else`, `pass`, string docstrings, `assert`, supported `raise`, supported `return`, single-name local assignments (`x = …`, `x: T = …`), other than to validator parameters, also inside branches, after which a local holds the value of the branch taken (a local set on some paths only raises `UnboundLocalError` where read on the others, which rejects that path; one that may be `None` on some path is unsupported) |
 | Rejection | `raise` of builtin `ValueError` or `AssertionError`, or of `PydanticCustomError`, with any message, including f-strings, and any `from` clause (both only run on paths that already reject); a failing `assert`, which `python -O` removes as usual |
 | Successful return | Original `self` for model validators, original value for field validators; bare return, `return None`, or fallthrough for dataclasses |
 | References | `self.field`, and `self.customer.age` through required nested models; field validator value parameter, or its fields when it validates a nested model; `info.data["earlier_field"]`, and `info.field_name`; previously assigned locals; named constants and standard Enum members from globals/closures, and the class's `ClassVar` constants through `self` or `cls` |

@@ -11,6 +11,10 @@
 
 ### Added
 
+- Validators may set a local inside `if` branches, as in `limit = 100` under one
+  branch and `limit = 10` under another: afterwards it holds the value of the branch
+  taken. Reading a local that the path taken never set raises `UnboundLocalError`,
+  which rejects that path, as in Python.
 - Validators may read the `.year` of a date or datetime, and call `.weekday()`
   and `.isoweekday()` on one, as in `self.issued.year >= 2030` or
   `self.day.weekday() < 5`. Z3 reads each exactly off the day number.
