@@ -671,6 +671,29 @@ def test_locals_may_be_set_in_branches():
         filler.fill(plan="free", seats=2)
 
 
+class Issue(BaseModel):
+    kind: Literal["bug", "feature", "question"]
+    priority: int = Field(ge=1, le=5)
+
+    @model_validator(mode="after")
+    def check(self):
+        match self.kind:
+            case "bug" if self.priority < 3:
+                raise ValueError("bugs are urgent")
+            case "question":
+                if self.priority != 5:
+                    raise ValueError("questions wait")
+        return self
+
+
+def test_validators_may_match():
+    # A match statement was unsupported, so strict mode refused this.
+    issue = ModelFiller(Issue, mode="strict").fill()
+    assert (issue.kind, issue.priority) == ("bug", 3)
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Issue, kind="question", priority=1)
+
+
 class Limited(BaseModel):
     LIMIT: ClassVar[int] = 7
     n: int

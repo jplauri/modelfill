@@ -183,6 +183,23 @@ def partly_set(self):
     return self
 
 
+def matching(self):
+    match self.a:
+        case 0 | 1:
+            limit = 1
+        case 2 if self.b > 0:
+            limit = self.b
+        case 3 as three:
+            limit = three + self.b
+        case other if other < 0:
+            raise ValueError("negative")
+        case _:
+            limit = 2
+    if self.b > limit:
+        raise ValueError("over the limit")
+    return self
+
+
 def other_rejections(self):
     if self.a < 0:
         raise AssertionError("negative")
@@ -214,6 +231,7 @@ def other_rejections(self):
         branch_locals,
         partly_set,
         branch_assignment,
+        matching,
     ],
 )
 def test_extraction_and_solver_match_python_exhaustively(validator):
@@ -325,6 +343,29 @@ def clock_parts(self):
 def day_and_time(self):
     if self.a.date() == self.d or self.a.time() >= self.b:
         raise ValueError("invalid")
+    return self
+
+
+def matching_none(self):
+    match self.a:
+        case None:
+            return self
+        case True:  # An int is never the True singleton.
+            raise ValueError("unreachable")
+        case 1 | 2 as small if self.b != small:
+            raise ValueError("invalid")
+    return self
+
+
+def matching_flags(self):
+    match self.a:
+        case True:
+            if self.b < 1:
+                raise ValueError("invalid")
+        case False:
+            pass
+        case None if self.b > 1:
+            raise ValueError("invalid")
     return self
 
 
@@ -481,6 +522,12 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
         (optional_values, MAYBE, MAYBE_GRID),
         (optional_unguarded, MAYBE, MAYBE_GRID),
         (optional_chain, MAYBE, MAYBE_GRID),
+        (matching_none, MAYBE, MAYBE_GRID),
+        (
+            matching_flags,
+            {"a": Domain("bool", nullable=True), "b": INT},
+            {"a": [None, False, True], "b": range(-1, 4)},
+        ),
         (date_rules, {"a": Domain("date"), "b": Domain("date")}, {"a": DAYS, "b": DAYS}),
         (module_constants, {"a": Domain("date"), "b": Domain("date")}, {"a": DAYS, "b": DAYS}),
         (schedule_rules, SCHEDULE, SCHEDULE_GRID),
@@ -592,6 +639,29 @@ def test_locals_set_in_branches_need_one_type_and_no_none():
         extract_validator(none_on_a_path, {"a": INT, "b": INT})
     with pytest.raises(UnsupportedConstraint, match="must have the same type"):
         extract_validator(mixed_locals, {"a": INT, "b": INT})
+
+
+def capture_after_match(self):
+    match self.a:
+        case other if other > 0:
+            pass
+    if other > 1:  # Bound whenever the case was tried, guard or not.
+        raise ValueError("invalid")
+    return self
+
+
+def class_pattern(self):
+    match self.a:
+        case int(value) if value > 1:
+            raise ValueError("invalid")
+    return self
+
+
+def test_match_patterns_beyond_values_are_unsupported():
+    with pytest.raises(UnsupportedConstraint, match="other is read after the match"):
+        extract_validator(capture_after_match, {"a": INT})
+    with pytest.raises(UnsupportedConstraint, match="unsupported pattern MatchClass"):
+        extract_validator(class_pattern, {"a": INT})
 
 
 def test_dataclass_implicit_and_explicit_returns():
