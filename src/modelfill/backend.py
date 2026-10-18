@@ -189,6 +189,10 @@ class Solver:
             return z3.If(*args)
         if op == "len":
             return z3.Length(args[0])
+        if op == "startswith":
+            return z3.PrefixOf(args[1], args[0])
+        if op == "endswith":
+            return z3.SuffixOf(args[1], args[0])
         raise UnsupportedConstraint(f"Unknown IR operation: {op}")
 
     @contextmanager

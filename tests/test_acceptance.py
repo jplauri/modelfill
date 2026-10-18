@@ -496,6 +496,25 @@ def test_multiples_past_the_precision_are_left_to_pydantic():
     assert ModelFiller(Vast, mode="strict").fill().x == Decimal(f"{10**27}.1")
 
 
+class Catalog(BaseModel):
+    sku: str
+    filename: str
+
+    @model_validator(mode="after")
+    def check(self):
+        if not self.sku.startswith("SKU-") or not self.filename.endswith((".csv", ".tsv")):
+            raise ValueError("a SKU starts with SKU-, and the file is a CSV or TSV")
+        return self
+
+
+def test_rules_may_test_how_strings_start_and_end():
+    # Both methods were unsupported, so strict mode refused this.
+    catalog = ModelFiller(Catalog, mode="strict").fill()
+    assert catalog.sku.startswith("SKU-") and catalog.filename.endswith((".csv", ".tsv"))
+    with pytest.raises(UnsatisfiableConstraints):
+        fill(Catalog, filename="data.json")
+
+
 class Limited(BaseModel):
     LIMIT: ClassVar[int] = 7
     n: int

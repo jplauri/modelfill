@@ -169,6 +169,15 @@ def prefixed(expr: Expr, prefix: str) -> Expr:
     return replace(expr, args=tuple(prefixed(arg, prefix) for arg in expr.args))
 
 
+# IR operations that the operator module lacks.
+_FUNCTIONS = {
+    "not": operator.not_,
+    "len": len,
+    "startswith": str.startswith,
+    "endswith": str.endswith,
+}
+
+
 def evaluate(expr: Expr, values: Mapping[str, Any]) -> Any:
     """Python's own meaning of an expression for concrete values, lazy like and/or."""
     if expr.op == "const":
@@ -185,5 +194,5 @@ def evaluate(expr: Expr, values: Mapping[str, Any]) -> Any:
         condition, yes, no = expr.args
         return evaluate(yes if evaluate(condition, values) else no, values)
     args = [evaluate(arg, values) for arg in expr.args]
-    function = {"not": operator.not_, "len": len}.get(expr.op) or getattr(operator, expr.op)
+    function = _FUNCTIONS.get(expr.op) or getattr(operator, expr.op)
     return function(*args)

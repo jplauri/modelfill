@@ -244,6 +244,14 @@ def decimal_arithmetic(self):
     return self
 
 
+def affixes(self):
+    if self.a.startswith(("ab", "b")) and not self.a.endswith(self.b):
+        raise ValueError("invalid")
+    if self.b.endswith("") and self.b.startswith("😀"):
+        raise ValueError("invalid")
+    return self
+
+
 def boolean_numbers(self):
     if self.a == self.b and self.a + self.b > 1:
         raise ValueError("invalid")
@@ -329,6 +337,7 @@ SCHEDULE_GRID = {
     "length": [timedelta(minutes=minutes) for minutes in (-30, 0, 30, 90)],
 }
 TEXTS = ("", "x", "ok", "no", "😀")
+AFFIXED = ("", "b", "ab", "abc", "cab", "😀b")
 COLORS = Domain("enum", tuple(Color))
 NUMBERS = Domain("enum", tuple(Number))
 # Literal subsets must still encode members by their position in the whole Enum.
@@ -350,6 +359,7 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
         (decimal_arithmetic, LEDGER, PRICE_GRID),
         (boolean_numbers, {"a": BOOL, "b": INT}, {"a": (False, True), "b": range(-1, 3)}),
         (text_conditions, {"a": STR, "b": STR}, {"a": TEXTS, "b": TEXTS}),
+        (affixes, {"a": STR, "b": STR}, {"a": AFFIXED, "b": AFFIXED}),
         (enum_validation, {"a": COLORS, "b": NUMBERS}, {"a": Color, "b": Number}),
         (literal_subsets, BLUE_ONLY, {"a": (Color.BLUE,), "b": Color}),
         (enum_operands, ZERO_FIRST, {"a": (Number.ZERO,), "b": Number, "c": Number}),
@@ -375,6 +385,17 @@ def not_a_number(self):
     if self.a > Decimal("NaN"):
         raise ValueError("invalid")
     return self
+
+
+def numeric_prefix(self):
+    if self.a.startswith(1):
+        raise ValueError("invalid")
+    return self
+
+
+def test_affix_methods_need_strings():
+    with pytest.raises(UnsupportedConstraint, match=r"startswith\(\) needs strings"):
+        extract_validator(numeric_prefix, {"a": STR})
 
 
 def test_only_finite_decimal_constants_are_read():
