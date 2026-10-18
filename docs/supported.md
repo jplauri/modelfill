@@ -1,10 +1,10 @@
 # What modelfill supports
 
 This is the full list of what modelfill reads. A field of a type it does not solve is
-an [external field](../README.md#fields-the-solver-does-not-model): it gets your
+an [external field](../README.md#external-fields): it gets your
 value, a provider's, its default or a boring one, and Pydantic validates it as usual.
 Validation logic outside this list is unsupported: strict mode refuses the model, and
-auto mode [falls back](../README.md#unsupported-features-and-fallback) to a bounded
+auto mode [falls back](../README.md#unsupported-logic-and-fallback) to a bounded
 search that never claims impossibility.
 
 ## Models
@@ -34,6 +34,26 @@ search that never claims impossibility.
 
 Every other type is an external field: floats, containers, UUIDs, aware datetimes,
 other unions, mixed-type `Literal`s, Flags and Enums with custom behavior among them.
+
+### Boring values
+
+An external field without your value, a provider, a default or a nested model's
+completion gets a boring value:
+
+| Field | Boring value |
+| --- | --- |
+| `X \| None`, `Any` | `None` |
+| `list`, `tuple[X, ...]`, `set`, `dict` | empty; a list or tuple with `min_length` repeats its element's boring value, and a set or dict gets distinct elements or keys: that value, then the next ones (`0`, `1`, … or `""`, `"1"`, …) |
+| `tuple[int, str]` | each element's boring value: `(0, "")` |
+| `float`, `Decimal` without `decimal_places` | `0`, or the whole number nearest 0 that the bounds allow (`gt=0` gives `1.0`) |
+| `int \| str` and other unions | the first member's boring value |
+| `UUID`, `UUID4`, … | `00000000-0000-4000-8000-000000000000`, with the version bits the annotation asks for |
+| `bytes`, `AwareDatetime` | `b""`, 2025-01-01 00:00 UTC |
+| `PastDate`, `FutureDate` | 2000-01-01 and 2100-01-01, fixed so canonical values stay put; `PastDatetime` and `FutureDatetime` likewise at midnight |
+| `list[M]`, `tuple[M, ...]`, `dict[K, M]` of models | as many canonical completions of `M` as `min_length` asks, each a new object, under the keys above |
+| `A \| B` of models | the first member that fills, in declaration order: a tagged union's first branch, whose tag is the one value its `Literal` allows |
+| `EmailStr`, URLs, `SecretStr` | `user@example.com`, `https://example.com/`, `SecretStr("")` |
+| Flags, unusual enums, mixed `Literal` | the first member |
 
 Z3 strings cover U+0000 to U+2FFFF, ordinary text and emoji included. A fixed string
 outside that range is unsupported. Such a literal in a validator makes strict mode
