@@ -208,8 +208,8 @@ def test_decimal_multiples_are_sound_in_small_contexts(data, prec, emin):
             filler = ModelFiller(model)
         try:
             expected = model(value=value)
-        except ValidationError:
-            with pytest.raises((UnsatisfiableConstraints, GenerationExhausted)):
+        except (ValidationError, ArithmeticError):  # Pydantic 2.10 lets a signal out.
+            with pytest.raises((UnsatisfiableConstraints, GenerationExhausted, ArithmeticError)):
                 filler.fill(value=value)
         else:
             assert filler.fill(value=value) == expected
