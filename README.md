@@ -337,8 +337,9 @@ ModelFiller(Meeting).explain()
 Canonical values are for tests that need *a* valid object. To hunt bugs, explore
 with `modelfill.hypothesis.from_model`, a Hypothesis strategy that needs the
 `hypothesis` extra. Pass strategies for the fields you want Hypothesis to drive;
-required external fields without a provider default to `st.from_type`, and
-modelfill solves the rest, picking values at random, often at the edges of their
+required external fields without a provider default to `st.from_type`, with any
+model inside one, as in `list[Item]`, drawn by `from_model` so that its rules hold,
+and modelfill solves the rest, picking values at random, often at the edges of their
 feasible ranges, where bugs tend to hide. Pass a configured `ModelFiller` in place
 of the class to set its options, so they never collide with field names:
 

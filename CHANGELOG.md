@@ -46,6 +46,10 @@
   its tags and constraints included, so `tuple[Literal["a"], A] | tuple[Literal["b"],
   B]` completes `("b", {})` with a `B`. The first member of the value's shape
   completed it, whether or not it took the result.
+- `from_model` draws a model inside a field, as in `list[Item]`, `Item | None` or
+  `dict[str, Item]`, with `from_model` too, so its rules hold. `st.from_type`
+  built it from independent fields, and a rule of `Item` that relates them made
+  the draw fail with a raw `ValidationError`.
 
 ## 0.4.0
 
