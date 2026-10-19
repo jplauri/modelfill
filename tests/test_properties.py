@@ -8,7 +8,7 @@ import itertools
 import linecache
 import random
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from types import SimpleNamespace
 from typing import Annotated
 
@@ -19,7 +19,13 @@ from hypothesis import strategies as st
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError, create_model, model_validator
 
 from examples.meeting import Meeting
-from modelfill import ModelFiller, UnsatisfiableConstraints, UnsupportedConstraint, fill
+from modelfill import (
+    GenerationExhausted,
+    ModelFiller,
+    UnsatisfiableConstraints,
+    UnsupportedConstraint,
+    fill,
+)
 from modelfill.backend import Solver
 from modelfill.extract import extract_validator
 from modelfill.ir import INT, Domain, decode, encode, node, var
@@ -184,6 +190,31 @@ def test_decimal_constraints_match_pydantic(data):
         pass
 
 
+@given(st.data(), st.integers(1, 6), st.integers(-6, 0))
+def test_decimal_multiples_are_sound_in_small_contexts(data, prec, emin):
+    # Pydantic's multiple_of divides in the context, where a quotient may round to a
+    # whole number. modelfill may refuse the model or leave such values to Pydantic,
+    # but must never call a value that Pydantic takes impossible. Only the division
+    # depends on the context; bounds and digits do not.
+    step = data.draw(st.sampled_from([Decimal("0.05"), Decimal("1.5"), 2, 10**4]))
+    places = data.draw(st.integers(0, 3))
+    field = Field(decimal_places=places, multiple_of=step)
+    model = create_model("Stepped", value=(Decimal, field))
+    value = data.draw(st.decimals(-12, 12, places=places))
+    with localcontext(prec=prec, Emin=emin):
+        try:
+            filler = ModelFiller(model, mode="strict")
+        except UnsupportedConstraint:
+            filler = ModelFiller(model)
+        try:
+            expected = model(value=value)
+        except (ValidationError, ArithmeticError):  # Pydantic 2.10 lets a signal out.
+            with pytest.raises((UnsatisfiableConstraints, GenerationExhausted, ArithmeticError)):
+                filler.fill(value=value)
+        else:
+            assert filler.fill(value=value) == expected
+
+
 @given(st.dictionaries(st.sampled_from(["start", "end", "duration"]), st.integers(-1, 20)))
 def test_canonical_meetings_are_stable_and_impossibility_is_real(partial):
     try:
@@ -255,11 +286,18 @@ def matches(first: str, second: str) -> st.SearchStrategy[str]:
     guards = conditions.map(" if {}".format)
     bodies = st.sampled_from(["raise ValueError('rejected')", "return self", "pass"])
     bodies |= conditions.map("if {}:\n                raise ValueError('rejected')".format)
+    bodies |= st.tuples(fields, operators, numbers, numbers, operators, fields).map(
+        lambda t: (  # Sets the local on one path, then reads it.
+            f"if {t[0]} {t[1]} {t[2]}:\n                seen = {t[3]}\n"
+            f"            if seen {t[4]} {t[5]}:\n                raise ValueError('rejected')"
+        )
+    )
     case = st.tuples(patterns, st.just("") | guards, bodies)
+    later = st.tuples(st.just("_") | patterns, st.just("") | guards, bodies)  # Often reached.
     cases = st.tuples(
         st.lists(case, max_size=1),
         st.tuples(captures, guards, bodies),
-        st.lists(case, min_size=1, max_size=2),
+        st.lists(later, min_size=1, max_size=2),
     ).map(lambda parts: [*parts[0], parts[1], *parts[2]])
 
     def render(parts: tuple[str, str, list[tuple[str, str, str]]]) -> str:
@@ -294,6 +332,11 @@ def validators(first: str, second: str) -> st.SearchStrategy[list[str]]:
 
 SHAPES = {  # The two reads, the solver fields they become, and an object Python validates.
     "flat": (validators("self.a", "self.b"), ("a", "b"), lambda a, b: SimpleNamespace(a=a, b=b)),
+    "matches": (  # Only match statements, whose branch state is the hardest to track.
+        st.lists(matches("self.a", "self.b"), min_size=1, max_size=2),
+        ("a", "b"),
+        lambda a, b: SimpleNamespace(a=a, b=b),
+    ),
     "nested": (
         validators("self.inner.a", "self.b"),
         ("inner.a", "b"),

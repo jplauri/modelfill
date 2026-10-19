@@ -289,12 +289,12 @@ filler = ModelFiller(
 assert (filler.fill().id, filler.fill().customer.id) == (UUID(int=7), UUID(int=9))
 ```
 
-A provider is a zero-argument callable, run once per returned object like a default
-factory, so each batch member gets its own values. One that provides a required
-nested model, which is solved with its parent, fixes it for the whole call, as an
-instance or a dict, at any depth. Providers apply only to fields the solver does not
-model, so one that targets a solved field, or a path that does not exist, fails when
-the filler is created.
+A provider is a zero-argument callable, run once per returned object, so each batch
+member gets its own values. One that provides a required nested model, which is
+solved with its parent, fixes it for the whole call, as an instance or a dict, at
+any depth. Providers apply only to fields the solver does not model, so one that
+targets a solved field, or a path that does not exist, fails when the filler is
+created.
 
 A field with no value from any source, such as one of an arbitrary class, raises
 `UnsupportedConstraint`; pass a value or add a provider. If Pydantic keeps rejecting
@@ -337,8 +337,9 @@ ModelFiller(Meeting).explain()
 Canonical values are for tests that need *a* valid object. To hunt bugs, explore
 with `modelfill.hypothesis.from_model`, a Hypothesis strategy that needs the
 `hypothesis` extra. Pass strategies for the fields you want Hypothesis to drive;
-required external fields without a provider default to `st.from_type`, and
-modelfill solves the rest, picking values at random, often at the edges of their
+required external fields without a provider default to `st.from_type`, with any
+model inside one, as in `list[Item]`, drawn by `from_model` so that its rules hold,
+and modelfill solves the rest, picking values at random, often at the edges of their
 feasible ranges, where bugs tend to hide. Pass a configured `ModelFiller` in place
 of the class to set its options, so they never collide with field names:
 
@@ -414,9 +415,12 @@ modelfill.hypothesis.from_model(Model_or_filler, **field_strategies)
 - Fixed values are hard constraints, any subset of them solved together, and a
   returned object keeps both their type and value; validator normalization cannot
   silently replace them.
-- Defaults are **preferences**, used where they fit the rules. A missing field's
-  zero-argument default factory runs once per fill call, and standard defaults are
-  copied.
+- Defaults are **preferences**, used where they fit the rules. A missing solved
+  field's zero-argument default factory runs once per fill call, and standard
+  defaults are copied. A field the solver does not model keeps the model's own
+  default, so Pydantic runs its factory at each construction: once per returned
+  object, unless the search tries several candidates, as in fallback. A provider
+  runs once per returned object, however many candidates the search tries.
 - Every generated field, a selected default included, is passed to the constructor
   and validated, which is stricter than Pydantic's habit of leaving omitted defaults
   unchecked. So while a default Pydantic would leave unchecked is omitted, a

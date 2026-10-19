@@ -364,6 +364,12 @@ def _metadata_constraints(
             # A multiple's units are multiples of these: 0.25 on a grid of tenths leaves
             # multiples of 0.5.
             units = step * 10**domain.scale
+            # The least quotient but 0 is 1 / units. Below 10**Emin it is subnormal, which
+            # rounds more coarsely, to 0 even, and may pass as a multiple: not modeled.
+            emin = getcontext().Emin
+            if len(str(units.numerator)) > -emin and units > 10**-emin:
+                unsupported.append(f"Field {name!r}: multiple_of could round past the context")
+                continue
             divisor = const(decode("decimal", units.numerator, domain.scale))
             remainder = node("mod", expression, divisor, sort=Domain("decimal", scale=domain.scale))
             # Pydantic divides by the step in the context's precision: a quotient past it

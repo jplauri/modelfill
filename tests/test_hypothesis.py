@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from hypothesis import find, given, settings
+from hypothesis import Phase, find, given, settings
 from hypothesis import strategies as st
 from pydantic import BaseModel, Field, model_validator
 
@@ -111,6 +111,35 @@ class Labeled(BaseModel):
 @given(from_model(ModelFiller(Labeled, providers={UUID: lambda: UUID(int=7)})))
 def test_providers_supply_required_fields_too(labeled):
     assert labeled.id == UUID(int=7)
+
+
+class Step(BaseModel):
+    start: int
+    end: int
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.end != self.start + 1:
+            raise ValueError("end must follow start")
+        return self
+
+
+class Walk(BaseModel):
+    steps: list[Step]
+    detour: Step | None
+    marks: dict[str, tuple[Step, int]]
+
+
+def test_models_inside_fields_are_drawn_with_their_rules():
+    # Hypothesis built each Step from independent fields, and its rule rejected the draw
+    # with a raw ValidationError.
+    walk = find(
+        from_model(Walk),
+        lambda walk: walk.steps and walk.detour and walk.marks,
+        settings=settings(REPLAYABLE, phases=[Phase.generate]),  # Any one will do.
+    )
+    steps = [*walk.steps, walk.detour, *(step for step, _ in walk.marks.values())]
+    assert all(step.end == step.start + 1 for step in steps)
 
 
 class Coded(BaseModel):

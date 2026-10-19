@@ -6,13 +6,16 @@ Requires the optional dependency: ``pip install "modelfill[hypothesis]"``.
 from __future__ import annotations
 
 import random
+import types
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Union, get_args, get_origin
 
 from hypothesis import reject
 from hypothesis import strategies as st
 
-from .errors import GenerationExhausted, UnsatisfiableConstraints
+from .adapters import _resolve
+from .boring import _LISTS, _MAPPINGS, models_in, nested_model
+from .errors import GenerationExhausted, UnsatisfiableConstraints, UnsupportedConstraint
 from .filler import ModelFiller
 
 
@@ -25,17 +28,18 @@ def from_model[T](
     ``max_attempts``, ``work_limit``, ``timeout_ms`` or ``providers``; keyword
     arguments are always field names, mapped to strategies. Required fields the
     solver does not model default to ``st.from_type`` of their annotation unless a
-    provider supplies them, and modelfill solves every other field.
-    Unlike ``fill``, the solved fields are explored: random, often at the edges of
-    their feasible ranges. Draws that make the rules impossible are rejected instead
-    of failing; Hypothesis counts that as filtering. Each example uses a fresh solver
-    seeded from the draw, so examples replay and the drawn fields shrink; the solved
-    fields do not shrink.
+    provider supplies them, except that a model inside one, as in ``list[Item]`` or
+    ``Item | None``, is drawn by ``from_model``, so its rules hold. modelfill solves
+    every other field. Unlike ``fill``, the solved fields are explored: random,
+    often at the edges of their feasible ranges. Draws that make the rules
+    impossible are rejected instead of failing; Hypothesis counts that as filtering.
+    Each example uses a fresh solver seeded from the draw, so examples replay and the
+    drawn fields shrink; the solved fields do not shrink.
     """
     template = model if isinstance(model, ModelFiller) else ModelFiller(model)
     solved_nested = dict(template._compiled.nested)  # Explored by the solver instead.
     strategies = {  # A drawn value would override the field's provider.
-        field.name: st.from_type(field.annotation)
+        field.name: _inferred(template, field.name, field.annotation)
         for field in template._compiled.adapter.fields
         if field.domain is None
         and field.required
@@ -55,3 +59,29 @@ def from_model[T](
             reject()
 
     return instances()
+
+
+def _inferred(template: ModelFiller[Any], name: str, annotation: Any) -> st.SearchStrategy[Any]:
+    """st.from_type, except that each model in the type, at any depth, is drawn by
+    from_model with the template's options and the providers under the field: Hypothesis
+    builds a model from independent fields, which its rules may reject. A model that
+    cannot be completed, as one that contains itself, is built as before."""
+    resolved = _resolve(annotation)[0]
+    if not models_in(resolved):
+        return st.from_type(annotation)
+    if nested_model(resolved) is resolved:
+        try:
+            return from_model(template._nested_filler(name, resolved))
+        except UnsupportedConstraint:
+            return st.from_type(annotation)
+    origin, args = get_origin(resolved), get_args(resolved)
+    inner = [_inferred(template, name, arg) for arg in args if arg is not Ellipsis]
+    if origin in (Union, types.UnionType):
+        return st.one_of(inner)
+    if origin is tuple and args[-1] is not Ellipsis:
+        return st.tuples(*inner)
+    if origin in _LISTS or origin is tuple:
+        return st.lists(inner[0]).map(tuple) if origin is tuple else st.lists(inner[0])
+    if origin in _MAPPINGS and len(args) == 2:
+        return st.dictionaries(st.from_type(args[0]), inner[1])
+    return st.from_type(annotation)

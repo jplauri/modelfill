@@ -173,26 +173,30 @@ class _Analyzer:
         on past them. After them, a local that the branches set differently is the
         value of the branch taken, and one set by some paths only is unbound on the rest;
         a branch that never goes on leaves nothing behind."""
-        start = dict(self.bound), dict(self.maybe)
+        start = dict(self.bound), dict(self.maybe), set(self.hidden)
         yes_return, yes_on = yes()
-        taken = self.bound, self.maybe
-        self.bound, self.maybe = dict(start[0]), dict(start[1])
+        taken = self.bound, self.maybe, self.hidden
+        self.bound, self.maybe, self.hidden = dict(start[0]), dict(start[1]), set(start[2])
         no_return, no_on = no()
         if yes_on == const(False):
             pass  # The locals are the other branch's.
         elif no_on == const(False):
-            self.bound, self.maybe = taken
+            self.bound, self.maybe, self.hidden = taken
         else:
             self.merge(condition, taken, syntax)
         returned = _or(_and(condition, yes_return), _and(_not(condition), no_return))
         return returned, _or(_and(condition, yes_on), _and(_not(condition), no_on))
 
     def merge(
-        self, condition: Expr, taken: tuple[dict[str, Expr], dict[str, Expr]], syntax: ast.AST
+        self,
+        condition: Expr,
+        taken: tuple[dict[str, Expr], dict[str, Expr], set[str]],
+        syntax: ast.AST,
     ) -> None:
         """Merge the locals of the branch taken when condition holds into the current
-        ones, those of the other branch."""
-        bound, maybe = taken
+        ones, those of the other branch. A capture hidden on either cannot be read."""
+        bound, maybe, hidden = taken
+        self.hidden |= hidden
         for name in dict.fromkeys([*bound, *self.bound]):
             yes_set = maybe.get(name, const(True)) if name in bound else const(False)
             no_set = self.maybe.get(name, const(True)) if name in self.bound else const(False)
@@ -220,10 +224,10 @@ class _Analyzer:
         matched = self.pattern(subject, case.pattern, names)
         guard, safe = const(True), const(True)
         if case.guard is not None:  # It sees the captures, and runs only on a match.
-            outer = dict(self.bound), dict(self.maybe)
+            outer = dict(self.bound), dict(self.maybe), set(self.hidden)
             self.bind(names, subject)
             guard, safe = self.guarded(self.truth, case.guard)
-            self.bound, self.maybe = outer
+            self.bound, self.maybe, self.hidden = outer
             safe = _or(_not(matched), safe)
 
         def body() -> tuple[Expr, Expr]:

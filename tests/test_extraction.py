@@ -672,6 +672,19 @@ def capture_in_later_case(self):
     return self
 
 
+def capture_overwritten_on_one_path(self):
+    seen = 0
+    match self.a:
+        case seen if seen > 1:
+            pass
+        case _:
+            if self.b > 0:
+                seen = 5
+            if seen != self.a:  # The capture, where the branch did not overwrite it.
+                raise ValueError("invalid")
+    return self
+
+
 def class_pattern(self):
     match self.a:
         case int(value) if value > 1:
@@ -684,6 +697,8 @@ def test_match_patterns_beyond_values_are_unsupported():
         extract_validator(capture_after_match, {"a": INT})
     with pytest.raises(UnsupportedConstraint, match="seen is read outside its binding case"):
         extract_validator(capture_in_later_case, {"a": INT})
+    with pytest.raises(UnsupportedConstraint, match="seen is read outside its binding case"):
+        extract_validator(capture_overwritten_on_one_path, {"a": INT, "b": INT})
     with pytest.raises(UnsupportedConstraint, match="unsupported pattern MatchClass"):
         extract_validator(class_pattern, {"a": INT})
 

@@ -12,7 +12,8 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Literal, TypeAliasType, Union, get_args, get_origin
+from functools import lru_cache
+from typing import Any, Literal, Union, get_args, get_origin
 
 from annotated_types import Ge, Gt, Le, Lt, MinLen, MultipleOf
 from pydantic import (
@@ -27,8 +28,11 @@ from pydantic import (
     NaiveDatetime,
     PastDate,
     PastDatetime,
+    PydanticUserError,
     SecretBytes,
     SecretStr,
+    TypeAdapter,
+    ValidationError,
 )
 from pydantic.types import UuidVersion
 
@@ -83,27 +87,36 @@ def nested_model(annotation: Any) -> type | None:
     return None
 
 
-def models_in(annotation: Any, aliases: frozenset[TypeAliasType] = frozenset()) -> list[type]:
+def models_in(annotation: Any, outer: tuple[Any, ...] = ()) -> list[type]:
     """The models a value of this type can hold, at any depth: itself, a collection's
-    elements or values, a union's members. A recursive type alias is read once."""
-    if isinstance(annotation, TypeAliasType):
-        if annotation in aliases:
-            return []  # Its models are those found where it was read first.
-        aliases |= {annotation}
+    elements or values, a union's members. A recursive type is read once: its alias
+    resolves to the same object each time, however wrapped, as in Annotated."""
     annotation = _resolve(annotation)[0]
+    if any(annotation is seen for seen in outer):
+        return []  # Its models are those found where it was read first.
     if nested_model(annotation) is annotation:
         return [annotation]
-    return [model for arg in get_args(annotation) for model in models_in(arg, aliases)]
+    outer += (annotation,)
+    return [model for arg in get_args(annotation) for model in models_in(arg, outer)]
 
 
-def boring(annotation: Any, metadata: Sequence[Any] = (), fill: Fill | None = None) -> Any:
+def boring(
+    annotation: Any,
+    metadata: Sequence[Any] = (),
+    fill: Fill | None = None,
+    outer: tuple[Any, ...] = (),
+) -> Any:
     """A fixed, readable value of a type the solver does not model, or MISSING.
 
     A model has no boring value, but with fill one gets fill(model, {}): in its own
     place, as each of a collection's elements, or as a union's first member to fill
-    when no member is boring.
+    when no member is boring. Nor has a recursive type inside itself, where it would
+    never end, so a union passes over the member that holds it.
     """
     annotation, inherited = _resolve(annotation)  # NewType, type alias and Annotated layers.
+    if any(annotation is seen for seen in outer):  # An alias resolves to one object.
+        return MISSING
+    outer += (annotation,)
     metadata = (*inherited, *metadata)
     origin, args = get_origin(annotation), get_args(annotation)
     if annotation in (Any, object):
@@ -113,29 +126,32 @@ def boring(annotation: Any, metadata: Sequence[Any] = (), fill: Fill | None = No
     if origin in (Union, types.UnionType):
         if type(None) in args:
             return None
-        value = next((value for value in map(boring, args) if value is not MISSING), MISSING)
-        return value if value is not MISSING or fill is None else _first(args, fill)
+        values = (boring(arg, outer=outer) for arg in args)
+        value = next((value for value in values if value is not MISSING), MISSING)
+        return value if value is not MISSING or fill is None else _first(args, fill, outer)
     if origin is Literal:
         return args[0]
     limits = {type(item): item for item in _flatten(metadata)}  # The last of each kind wins.
     size = limits[MinLen].min_length if MinLen in limits else 0
     kind = origin or annotation
     if kind is tuple and args and args[-1] is not Ellipsis:  # A fixed shape: one per position.
-        values = [boring(arg, fill=fill) for arg in args]
+        values = [boring(arg, fill=fill, outer=outer) for arg in args]
         return MISSING if any(value is MISSING for value in values) else tuple(values)
     if kind in _LISTS or kind is tuple:  # Empty, or min_length elements, each made anew.
-        elements = [boring(args[0], fill=fill) if args else None for _ in range(size)]
+        elements = [boring(args[0], fill=fill, outer=outer) if args else None for _ in range(size)]
         if any(element is MISSING for element in elements):
             return MISSING
         return (tuple if kind is tuple else list)(elements)
     if kind in _SETS:
-        elements = _distinct(args[0] if args else Any, size)
+        elements = _distinct(args[0] if args else Any, size, outer)
         return MISSING if elements is None else (frozenset if kind is frozenset else set)(elements)
     if kind in _MAPPINGS:  # Distinct keys, each with the value type's boring value.
-        keys = _distinct(args[0] if args else Any, size)
+        keys = _distinct(args[0] if args else Any, size, outer)
         if keys is None:
             return MISSING
-        values = {key: boring(args[1], fill=fill) if len(args) == 2 else None for key in keys}
+        values = {
+            key: boring(args[1], fill=fill, outer=outer) if len(args) == 2 else None for key in keys
+        }
         return MISSING if any(value is MISSING for value in values.values()) else values
     if kind is str:
         return "_" * size
@@ -161,8 +177,8 @@ def boring(annotation: Any, metadata: Sequence[Any] = (), fill: Fill | None = No
 def complete(annotation: Any, given: Any, fill: Fill) -> Any:
     """given, with each dict that stands for a model completed by fill(model, dict): in
     the model's place, as a collection's element or value, or for the first of a
-    union's model members of its shape that takes it. The shape stays as given, and
-    given itself is returned when it has another shape."""
+    union's model members of its shape that takes it, tag and constraints included.
+    The shape stays as given, and given itself is returned when it has another shape."""
     annotation = _resolve(annotation)[0]
     if nested_model(annotation) is annotation:
         return fill(annotation, given) if isinstance(given, dict) else given
@@ -172,14 +188,20 @@ def complete(annotation: Any, given: Any, fill: Fill) -> Any:
         if not members or not isinstance(given, (dict, list, tuple)):
             return given
         failures: list[Exception] = []
+        untaken = given  # The first completion that its member refused.
         for option in members:  # A tagged union's tag rules out the other branches.
             try:
                 completed = complete(option, given, fill)
             except (ModelFillError, TypeError, ValueError) as error:
                 failures.append(error)
                 continue
-            if completed is not given:  # A member of another shape returns it as it is.
+            if completed is given:  # A member of another shape returns it as it is.
+                continue
+            if _takes(option, completed):
                 return completed
+            untaken = completed if untaken is given else untaken
+        if untaken is not given:
+            return untaken  # No member takes it; Pydantic says why.
         if failures and len(members) == len([arg for arg in args if arg is not type(None)]):
             raise failures[0]
         return given  # A member without models, or none of its shape, may take it as it is.
@@ -199,12 +221,28 @@ def complete(annotation: Any, given: Any, fill: Fill) -> Any:
     return given
 
 
-def _first(options: Sequence[Any], fill: Fill) -> Any:
+_adapter = lru_cache(maxsize=128)(TypeAdapter)
+
+
+def _takes(annotation: Any, value: Any) -> bool:
+    """Whether Pydantic validates the value as this type. When it cannot say, for an
+    unhashable or unresolvable type, or one that needs the model's configuration, the
+    model's own validation decides later."""
+    try:
+        _adapter(annotation).validate_python(value)
+    except ValidationError:
+        return False
+    except (TypeError, NameError, PydanticUserError):
+        pass
+    return True
+
+
+def _first(options: Sequence[Any], fill: Fill, outer: tuple[Any, ...]) -> Any:
     """The first union member that fill can make, in declaration order, or MISSING."""
     failure = None
     for option in options:
         try:
-            value = boring(option, fill=fill)
+            value = boring(option, fill=fill, outer=outer)
         except ModelFillError as error:  # This member cannot be filled; the next may.
             failure = failure or error
             continue
@@ -215,9 +253,9 @@ def _first(options: Sequence[Any], fill: Fill) -> Any:
     return MISSING
 
 
-def _distinct(annotation: Any, count: int) -> list[Any] | None:
+def _distinct(annotation: Any, count: int, outer: tuple[Any, ...]) -> list[Any] | None:
     """count distinct boring values of a type, or None: its boring value, then the next."""
-    first = boring(annotation)
+    first = boring(annotation, outer=outer)
     annotation = _resolve(annotation)[0]
     if not count:
         return []

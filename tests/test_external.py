@@ -389,18 +389,38 @@ def test_dicts_inside_given_collections_and_unions_are_completed():
 
 type Json = dict[str, Json] | list[Json] | str | int | bool | None
 type Catalog = dict[str, Line | Catalog]
+type Notes = dict[str, Annotated[Notes, Field(description="nested notes")]] | int
+type Shelf = dict[str, Annotated[Line | Shelf, Field(description="a line or a shelf")]]
 
 
 class Document(BaseModel):
     data: Json
     catalog: Catalog
+    notes: Notes  # Behind Annotated, the alias once slipped past the cycle check.
+    shelf: Shelf
 
 
 def test_recursive_type_aliases_are_read_once():
     # Looking for models in a recursive alias never ended, even in a given value.
-    document = fill(Document, data={"ok": [1, None]}, catalog={"a": {}, "b": {"c": {}}})
+    given = {"a": {}, "b": {"c": {}}}
+    notes = {"a": {"b": 1}}
+    document = fill(Document, data={"ok": [1, None]}, catalog=given, notes=notes, shelf=given)
     line = Line(sku="sku", quantity=1, id=NIL4)
-    assert (document.data, document.catalog) == ({"ok": [1, None]}, {"a": line, "b": {"c": line}})
+    assert (document.data, document.notes) == ({"ok": [1, None]}, notes)
+    assert document.catalog == document.shelf == {"a": line, "b": {"c": line}}
+
+
+type Nest = Annotated[list[Nest], Field(min_length=1)] | int
+
+
+class Nested(BaseModel):
+    nest: Nest
+
+
+def test_a_recursive_type_alias_gets_a_boring_value_outside_itself():
+    # The list member needs a Nest inside it, and that one another, so its boring value
+    # never ended, though the other member has one.
+    assert fill(Nested).nest == 0
 
 
 class Alternatives(BaseModel):
@@ -421,6 +441,28 @@ def test_a_union_completes_a_given_value_through_a_member_of_its_shape():
     assert swapped.pair_or_named == (line, line)
     with pytest.raises(ValueError, match="Unknown field"):  # Only the model takes a dict.
         fill(Alternatives, one_or_many={"size": 1}, many_or_one={}, pair_or_named={})
+
+
+class Ay(BaseModel):
+    value: int
+
+
+class Bee(BaseModel):  # Ay's twin: only a tag or a constraint tells them apart.
+    value: int
+
+
+class Tagged(BaseModel):
+    pair: tuple[Literal["a"], Ay] | tuple[Literal["b"], Bee]
+    several: Annotated[list[Ay], Field(min_length=2)] | list[Bee]
+
+
+def test_a_union_completes_a_given_value_through_a_member_that_takes_it():
+    # The first member of the value's shape completed it, though it takes neither the
+    # tag "b" nor a single element.
+    tagged = fill(Tagged, pair=("b", {"value": 3}), several=[{"value": 1}])
+    assert (tagged.pair, tagged.several) == (("b", Bee(value=3)), [Bee(value=1)])
+    with pytest.raises(GenerationExhausted, match="Input should be 'b'"):
+        fill(Tagged, pair=("c", {"value": 3}), several=[])  # No member takes this tag.
 
 
 class Van(BaseModel):

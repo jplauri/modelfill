@@ -29,6 +29,31 @@
 - An Enum member's `.value` or `.name` is checked as any constant is, so a rule
   reading the value of an Enum of aware datetimes is unsupported instead of
   raising `TypeError` when filling.
+- A name an earlier `match` case captured stays unreadable in a later case where a
+  branch sets it on some paths only, as `if flag: seen = 5` does. Setting it on one
+  path made it readable on the other too, with the value from before the match, so
+  a satisfiable model could be called impossible.
+- A decimal `multiple_of` is unsupported in a Decimal context whose exponent
+  limits are narrow enough to round a quotient to zero, such as `Emin=0`, where
+  Pydantic takes 0.1 as a multiple of 10000. Such values were called impossible.
+- A recursive `type` alias that refers to itself through `Annotated`, as in
+  `dict[str, Annotated[Json, Field(description=...)]]`, is read once too, so a given
+  value of it no longer raises `RecursionError`.
+- A field of a recursive `type` alias whose recursive member needs elements, as
+  `Annotated[list[Nest], Field(min_length=1)] | int` does, gets the boring value of
+  another member, here 0, instead of raising `RecursionError`.
+- A given value for a union is completed through a member that takes the result,
+  its tags and constraints included, so `tuple[Literal["a"], A] | tuple[Literal["b"],
+  B]` completes `("b", {})` with a `B`. The first member of the value's shape
+  completed it, whether or not it took the result.
+- `from_model` draws a model inside a field, as in `list[Item]`, `Item | None` or
+  `dict[str, Item]`, with `from_model` too, so its rules hold. `st.from_type`
+  built it from independent fields, and a rule of `Item` that relates them made
+  the draw fail with a raw `ValidationError`.
+- The README no longer says that every default factory runs once per fill call.
+  That holds for solved fields; a field the solver does not model keeps the model's
+  own default, whose factory Pydantic runs at each construction, more than once
+  where the search tries several candidates. A provider runs once per object.
 
 ## 0.4.0
 
