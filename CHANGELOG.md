@@ -39,6 +39,9 @@
 - A recursive `type` alias that refers to itself through `Annotated`, as in
   `dict[str, Annotated[Json, Field(description=...)]]`, is read once too, so a given
   value of it no longer raises `RecursionError`.
+- A field of a recursive `type` alias whose recursive member needs elements, as
+  `Annotated[list[Nest], Field(min_length=1)] | int` does, gets the boring value of
+  another member, here 0, instead of raising `RecursionError`.
 
 ## 0.4.0
 

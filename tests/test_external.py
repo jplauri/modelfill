@@ -410,6 +410,19 @@ def test_recursive_type_aliases_are_read_once():
     assert document.catalog == document.shelf == {"a": line, "b": {"c": line}}
 
 
+type Nest = Annotated[list[Nest], Field(min_length=1)] | int
+
+
+class Nested(BaseModel):
+    nest: Nest
+
+
+def test_a_recursive_type_alias_gets_a_boring_value_outside_itself():
+    # The list member needs a Nest inside it, and that one another, so its boring value
+    # never ended, though the other member has one.
+    assert fill(Nested).nest == 0
+
+
 class Alternatives(BaseModel):
     one_or_many: Line | list[Line]
     many_or_one: list[Line] | Line

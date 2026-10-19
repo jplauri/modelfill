@@ -96,14 +96,23 @@ def models_in(annotation: Any, outer: tuple[Any, ...] = ()) -> list[type]:
     return [model for arg in get_args(annotation) for model in models_in(arg, outer)]
 
 
-def boring(annotation: Any, metadata: Sequence[Any] = (), fill: Fill | None = None) -> Any:
+def boring(
+    annotation: Any,
+    metadata: Sequence[Any] = (),
+    fill: Fill | None = None,
+    outer: tuple[Any, ...] = (),
+) -> Any:
     """A fixed, readable value of a type the solver does not model, or MISSING.
 
     A model has no boring value, but with fill one gets fill(model, {}): in its own
     place, as each of a collection's elements, or as a union's first member to fill
-    when no member is boring.
+    when no member is boring. Nor has a recursive type inside itself, where it would
+    never end, so a union passes over the member that holds it.
     """
     annotation, inherited = _resolve(annotation)  # NewType, type alias and Annotated layers.
+    if any(annotation is seen for seen in outer):  # An alias resolves to one object.
+        return MISSING
+    outer += (annotation,)
     metadata = (*inherited, *metadata)
     origin, args = get_origin(annotation), get_args(annotation)
     if annotation in (Any, object):
@@ -113,29 +122,32 @@ def boring(annotation: Any, metadata: Sequence[Any] = (), fill: Fill | None = No
     if origin in (Union, types.UnionType):
         if type(None) in args:
             return None
-        value = next((value for value in map(boring, args) if value is not MISSING), MISSING)
-        return value if value is not MISSING or fill is None else _first(args, fill)
+        values = (boring(arg, outer=outer) for arg in args)
+        value = next((value for value in values if value is not MISSING), MISSING)
+        return value if value is not MISSING or fill is None else _first(args, fill, outer)
     if origin is Literal:
         return args[0]
     limits = {type(item): item for item in _flatten(metadata)}  # The last of each kind wins.
     size = limits[MinLen].min_length if MinLen in limits else 0
     kind = origin or annotation
     if kind is tuple and args and args[-1] is not Ellipsis:  # A fixed shape: one per position.
-        values = [boring(arg, fill=fill) for arg in args]
+        values = [boring(arg, fill=fill, outer=outer) for arg in args]
         return MISSING if any(value is MISSING for value in values) else tuple(values)
     if kind in _LISTS or kind is tuple:  # Empty, or min_length elements, each made anew.
-        elements = [boring(args[0], fill=fill) if args else None for _ in range(size)]
+        elements = [boring(args[0], fill=fill, outer=outer) if args else None for _ in range(size)]
         if any(element is MISSING for element in elements):
             return MISSING
         return (tuple if kind is tuple else list)(elements)
     if kind in _SETS:
-        elements = _distinct(args[0] if args else Any, size)
+        elements = _distinct(args[0] if args else Any, size, outer)
         return MISSING if elements is None else (frozenset if kind is frozenset else set)(elements)
     if kind in _MAPPINGS:  # Distinct keys, each with the value type's boring value.
-        keys = _distinct(args[0] if args else Any, size)
+        keys = _distinct(args[0] if args else Any, size, outer)
         if keys is None:
             return MISSING
-        values = {key: boring(args[1], fill=fill) if len(args) == 2 else None for key in keys}
+        values = {
+            key: boring(args[1], fill=fill, outer=outer) if len(args) == 2 else None for key in keys
+        }
         return MISSING if any(value is MISSING for value in values.values()) else values
     if kind is str:
         return "_" * size
@@ -199,12 +211,12 @@ def complete(annotation: Any, given: Any, fill: Fill) -> Any:
     return given
 
 
-def _first(options: Sequence[Any], fill: Fill) -> Any:
+def _first(options: Sequence[Any], fill: Fill, outer: tuple[Any, ...]) -> Any:
     """The first union member that fill can make, in declaration order, or MISSING."""
     failure = None
     for option in options:
         try:
-            value = boring(option, fill=fill)
+            value = boring(option, fill=fill, outer=outer)
         except ModelFillError as error:  # This member cannot be filled; the next may.
             failure = failure or error
             continue
@@ -215,9 +227,9 @@ def _first(options: Sequence[Any], fill: Fill) -> Any:
     return MISSING
 
 
-def _distinct(annotation: Any, count: int) -> list[Any] | None:
+def _distinct(annotation: Any, count: int, outer: tuple[Any, ...]) -> list[Any] | None:
     """count distinct boring values of a type, or None: its boring value, then the next."""
-    first = boring(annotation)
+    first = boring(annotation, outer=outer)
     annotation = _resolve(annotation)[0]
     if not count:
         return []
