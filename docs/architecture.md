@@ -145,7 +145,9 @@ precision is unsupported, and so is one that could reach past the context's
 exponent limits, where Python rounds it to a subnormal or zero, or overflows.
 Pydantic's `multiple_of` divides in that precision too, so where a quotient is too
 large to divide exactly, the rule leaves the value to Pydantic, and no UNSAT proof
-rests on a rounded division. All of this holds under the context of compilation
+rests on a rounded division. A quotient too small for the exponent limits is
+subnormal, rounded more coarsely, even to zero, so where one is possible, the rule
+is unsupported. All of this holds under the context of compilation
 only, so a filler used under another context, which `localcontext()` or setting
 `getcontext().prec` makes, fills through a twin compiled under that one.
 

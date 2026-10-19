@@ -8,7 +8,7 @@ import itertools
 import linecache
 import random
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from types import SimpleNamespace
 from typing import Annotated
 
@@ -19,7 +19,13 @@ from hypothesis import strategies as st
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError, create_model, model_validator
 
 from examples.meeting import Meeting
-from modelfill import ModelFiller, UnsatisfiableConstraints, UnsupportedConstraint, fill
+from modelfill import (
+    GenerationExhausted,
+    ModelFiller,
+    UnsatisfiableConstraints,
+    UnsupportedConstraint,
+    fill,
+)
 from modelfill.backend import Solver
 from modelfill.extract import extract_validator
 from modelfill.ir import INT, Domain, decode, encode, node, var
@@ -182,6 +188,31 @@ def test_decimal_constraints_match_pydantic(data):
         filler.fill()
     except UnsatisfiableConstraints:
         pass
+
+
+@given(st.data(), st.integers(1, 6), st.integers(-6, 0))
+def test_decimal_multiples_are_sound_in_small_contexts(data, prec, emin):
+    # Pydantic's multiple_of divides in the context, where a quotient may round to a
+    # whole number. modelfill may refuse the model or leave such values to Pydantic,
+    # but must never call a value that Pydantic takes impossible. Only the division
+    # depends on the context; bounds and digits do not.
+    step = data.draw(st.sampled_from([Decimal("0.05"), Decimal("1.5"), 2, 10**4]))
+    places = data.draw(st.integers(0, 3))
+    field = Field(decimal_places=places, multiple_of=step)
+    model = create_model("Stepped", value=(Decimal, field))
+    value = data.draw(st.decimals(-12, 12, places=places))
+    with localcontext(prec=prec, Emin=emin):
+        try:
+            filler = ModelFiller(model, mode="strict")
+        except UnsupportedConstraint:
+            filler = ModelFiller(model)
+        try:
+            expected = model(value=value)
+        except ValidationError:
+            with pytest.raises((UnsatisfiableConstraints, GenerationExhausted)):
+                filler.fill(value=value)
+        else:
+            assert filler.fill(value=value) == expected
 
 
 @given(st.dictionaries(st.sampled_from(["start", "end", "duration"]), st.integers(-1, 20)))

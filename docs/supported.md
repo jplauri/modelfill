@@ -66,7 +66,9 @@ and a `Literal` with such a choice makes its field external.
 - `gt`, `ge`, `lt` and `le` on integers, decimals, dates, datetimes and timedeltas,
   strict or inclusive.
 - `multiple_of` on integers and decimals, and a decimal's `max_digits` and
-  `decimal_places`, exactly as Pydantic counts them.
+  `decimal_places`, exactly as Pydantic counts them. A decimal `multiple_of` is
+  unsupported in a Decimal context whose exponent limits are narrow enough that
+  Pydantic's division could round a quotient to zero.
 - `min_length` and `max_length` on strings, and the global `str_min_length` and
   `str_max_length`.
 - A [`pattern`](#patterns) on strings, with either regex engine.

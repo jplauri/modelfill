@@ -531,6 +531,20 @@ def test_compilations_follow_the_decimal_context():
         strict.fill(x=Decimal("1.2"))
 
 
+class Coarse(BaseModel):
+    x: Decimal = Field(decimal_places=1, multiple_of=Decimal("10000"))
+
+
+def test_multiples_whose_quotients_could_be_subnormal_are_unsupported():
+    # Where 0.1 / 10000 rounds to 0, Pydantic takes 0.1, but this was called impossible.
+    with localcontext(prec=4, Emin=0):
+        assert fill(Coarse, x=Decimal("0.1")).x == Decimal("0.1")
+        with pytest.raises(UnsupportedConstraint, match="multiple_of could round"):
+            ModelFiller(Coarse, mode="strict")
+    with pytest.raises(UnsatisfiableConstraints):  # In the default context, it is not.
+        fill(Coarse, x=Decimal("0.1"))
+
+
 class Catalog(BaseModel):
     sku: str
     filename: str

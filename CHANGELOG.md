@@ -33,6 +33,9 @@
   branch sets it on some paths only, as `if flag: seen = 5` does. Setting it on one
   path made it readable on the other too, with the value from before the match, so
   a satisfiable model could be called impossible.
+- A decimal `multiple_of` is unsupported in a Decimal context whose exponent
+  limits are narrow enough to round a quotient to zero, such as `Emin=0`, where
+  Pydantic takes 0.1 as a multiple of 10000. Such values were called impossible.
 
 ## 0.4.0
 
