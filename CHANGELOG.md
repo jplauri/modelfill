@@ -42,6 +42,10 @@
 - A field of a recursive `type` alias whose recursive member needs elements, as
   `Annotated[list[Nest], Field(min_length=1)] | int` does, gets the boring value of
   another member, here 0, instead of raising `RecursionError`.
+- A given value for a union is completed through a member that takes the result,
+  its tags and constraints included, so `tuple[Literal["a"], A] | tuple[Literal["b"],
+  B]` completes `("b", {})` with a `B`. The first member of the value's shape
+  completed it, whether or not it took the result.
 
 ## 0.4.0
 

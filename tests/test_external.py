@@ -443,6 +443,28 @@ def test_a_union_completes_a_given_value_through_a_member_of_its_shape():
         fill(Alternatives, one_or_many={"size": 1}, many_or_one={}, pair_or_named={})
 
 
+class Ay(BaseModel):
+    value: int
+
+
+class Bee(BaseModel):  # Ay's twin: only a tag or a constraint tells them apart.
+    value: int
+
+
+class Tagged(BaseModel):
+    pair: tuple[Literal["a"], Ay] | tuple[Literal["b"], Bee]
+    several: Annotated[list[Ay], Field(min_length=2)] | list[Bee]
+
+
+def test_a_union_completes_a_given_value_through_a_member_that_takes_it():
+    # The first member of the value's shape completed it, though it takes neither the
+    # tag "b" nor a single element.
+    tagged = fill(Tagged, pair=("b", {"value": 3}), several=[{"value": 1}])
+    assert (tagged.pair, tagged.several) == (("b", Bee(value=3)), [Bee(value=1)])
+    with pytest.raises(GenerationExhausted, match="Input should be 'b'"):
+        fill(Tagged, pair=("c", {"value": 3}), several=[])  # No member takes this tag.
+
+
 class Van(BaseModel):
     kind: Literal["van"]
     plate: UUID

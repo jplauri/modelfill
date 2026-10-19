@@ -12,6 +12,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
+from functools import lru_cache
 from typing import Any, Literal, Union, get_args, get_origin
 
 from annotated_types import Ge, Gt, Le, Lt, MinLen, MultipleOf
@@ -27,8 +28,11 @@ from pydantic import (
     NaiveDatetime,
     PastDate,
     PastDatetime,
+    PydanticUserError,
     SecretBytes,
     SecretStr,
+    TypeAdapter,
+    ValidationError,
 )
 from pydantic.types import UuidVersion
 
@@ -173,8 +177,8 @@ def boring(
 def complete(annotation: Any, given: Any, fill: Fill) -> Any:
     """given, with each dict that stands for a model completed by fill(model, dict): in
     the model's place, as a collection's element or value, or for the first of a
-    union's model members of its shape that takes it. The shape stays as given, and
-    given itself is returned when it has another shape."""
+    union's model members of its shape that takes it, tag and constraints included.
+    The shape stays as given, and given itself is returned when it has another shape."""
     annotation = _resolve(annotation)[0]
     if nested_model(annotation) is annotation:
         return fill(annotation, given) if isinstance(given, dict) else given
@@ -184,14 +188,20 @@ def complete(annotation: Any, given: Any, fill: Fill) -> Any:
         if not members or not isinstance(given, (dict, list, tuple)):
             return given
         failures: list[Exception] = []
+        untaken = given  # The first completion that its member refused.
         for option in members:  # A tagged union's tag rules out the other branches.
             try:
                 completed = complete(option, given, fill)
             except (ModelFillError, TypeError, ValueError) as error:
                 failures.append(error)
                 continue
-            if completed is not given:  # A member of another shape returns it as it is.
+            if completed is given:  # A member of another shape returns it as it is.
+                continue
+            if _takes(option, completed):
                 return completed
+            untaken = completed if untaken is given else untaken
+        if untaken is not given:
+            return untaken  # No member takes it; Pydantic says why.
         if failures and len(members) == len([arg for arg in args if arg is not type(None)]):
             raise failures[0]
         return given  # A member without models, or none of its shape, may take it as it is.
@@ -209,6 +219,22 @@ def complete(annotation: Any, given: Any, fill: Fill) -> Any:
     if kind in _MAPPINGS and len(args) == 2 and isinstance(given, dict):
         return {key: complete(args[1], value, fill) for key, value in given.items()}
     return given
+
+
+_adapter = lru_cache(maxsize=128)(TypeAdapter)
+
+
+def _takes(annotation: Any, value: Any) -> bool:
+    """Whether Pydantic validates the value as this type. When it cannot say, for an
+    unhashable or unresolvable type, or one that needs the model's configuration, the
+    model's own validation decides later."""
+    try:
+        _adapter(annotation).validate_python(value)
+    except ValidationError:
+        return False
+    except (TypeError, NameError, PydanticUserError):
+        pass
+    return True
 
 
 def _first(options: Sequence[Any], fill: Fill, outer: tuple[Any, ...]) -> Any:
