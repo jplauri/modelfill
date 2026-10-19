@@ -143,8 +143,9 @@ class _Analyzer:
         # Locals set on some paths only, with the condition that they are: reading one
         # elsewhere raises UnboundLocalError.
         self.maybe: dict[str, Expr] = {}
-        # Names a match pattern bound: after the match they are set on paths this does
-        # not follow (a failed guard leaves its capture bound), so they cannot be read.
+        # Names a match pattern bound: outside their case, in later cases and after the
+        # match, they are set on paths this does not follow (a failed guard leaves its
+        # capture bound), so they cannot be read.
         self.hidden: set[str] = set()
         self.requires: list[Expr] = []
         try:
@@ -229,9 +230,11 @@ class _Analyzer:
             self.bind(names, subject)
             return self.block(case.body)
 
-        returned, continued = self.fork(
-            _and(matched, guard), body, partial(self.cases, subject, cases[1:]), case.pattern
-        )
+        def rest() -> tuple[Expr, Expr]:
+            self.hidden.update(names)  # A failed guard leaves its captures bound.
+            return self.cases(subject, cases[1:])
+
+        returned, continued = self.fork(_and(matched, guard), body, rest, case.pattern)
         return _and(safe, returned), _and(safe, continued)
 
     def pattern(self, subject: Expr, pattern: ast.pattern, names: list[str]) -> Expr:
@@ -289,9 +292,12 @@ class _Analyzer:
 
     def exact(self, scale: int, digits: int, syntax: ast.AST) -> Domain:
         """A decimal result's sort, when Python computes it without rounding: Decimal
-        arithmetic rounds a result past the context's precision."""
-        if digits > decimal.getcontext().prec:
-            raise self.unsupported(syntax, "decimal arithmetic could round past the precision")
+        arithmetic rounds a result past the context's precision or exponent limits. The
+        result counts units of 10**-scale in at most digits digits, so its last digit
+        is in place -scale or above, and its first in place digits - scale - 1 or below."""
+        context = decimal.getcontext()
+        if digits > context.prec or -scale < context.Etiny() or digits - scale - 1 > context.Emax:
+            raise self.unsupported(syntax, "decimal arithmetic could round past the context")
         return Domain("decimal", scale=scale, digits=digits)
 
     def in_range(self, value: Expr) -> Expr:
@@ -515,7 +521,7 @@ class _Analyzer:
                     raise self.unsupported(syntax, "a nested model is read only through its fields")
                 return var(self.field_name, self.fields[self.field_name])
             if syntax.id in self.hidden:
-                raise self.unsupported(syntax, f"{syntax.id} is read after the match that binds it")
+                raise self.unsupported(syntax, f"{syntax.id} is read outside its binding case")
             if syntax.id in self.bound:
                 if syntax.id in self.maybe:  # Unset on some paths, where reading raises.
                     self.requires.append(self.maybe[syntax.id])
@@ -772,14 +778,13 @@ class _Analyzer:
         sort = PRIMITIVES.get(type(items[0]))
         if sort is None or any(type(item) is not type(items[0]) for item in items):
             raise self.unsupported(syntax, f"Enum {attribute}s must share one supported type")
-        if not all(encodable(item) for item in items):
-            raise self.unsupported(syntax, "string constants above U+2FFFF are unsupported")
+        values = [self.constant(item, syntax) for item in items]  # No aware datetimes, say.
         if member.op == "const":
             return const(getattr(member.value, attribute))
         member = self.present(member)  # None has neither: Python raises AttributeError.
-        result = const(items[-1])
-        for choice, item in zip(choices[-2::-1], items[-2::-1], strict=True):
-            result = node("ite", node("eq", member, const(choice)), const(item), result, sort=sort)
+        result = values[-1]
+        for choice, value in zip(choices[-2::-1], values[-2::-1], strict=True):
+            result = node("ite", node("eq", member, const(choice)), value, result, sort=sort)
         return result
 
     def field_path(self, syntax: ast.expr) -> str:

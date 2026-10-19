@@ -607,12 +607,23 @@ def doubled(self):
 
 
 def test_decimal_arithmetic_needs_digits_python_keeps():
-    # Python rounds a Decimal result past its precision, which the solver cannot model.
+    # Python rounds a Decimal result past its context's precision or exponent limits,
+    # which the solver cannot model.
     with pytest.raises(UnsupportedConstraint, match="needs max_digits"):
         extract_validator(doubled, PRICES)
-    with pytest.raises(UnsupportedConstraint, match="round past the precision"):
+    with pytest.raises(UnsupportedConstraint, match="round past the context"):
         extract_validator(doubled, {"a": Domain("decimal", scale=2, digits=28)})
     assert extract_validator(doubled, {"a": Domain("decimal", scale=2, digits=27)})
+    tiny = {"a": Domain("decimal", scale=4, digits=1)}  # Down to 0.0001.
+    large = {"a": Domain("decimal", scale=0, digits=2)}  # Up to 99.
+    with dc.localcontext(prec=4, Emin=0):  # Down to 0.001: 0.0001 * 2 rounds to 0.
+        with pytest.raises(UnsupportedConstraint, match="round past the context"):
+            extract_validator(doubled, tiny)
+        assert extract_validator(doubled, large)
+    with dc.localcontext(Emax=1):  # Up to 99.99...: 99 * 2 overflows.
+        with pytest.raises(UnsupportedConstraint, match="round past the context"):
+            extract_validator(doubled, large)
+        assert extract_validator(doubled, tiny)
 
 
 def none_on_a_path(self):
@@ -650,6 +661,17 @@ def capture_after_match(self):
     return self
 
 
+def capture_in_later_case(self):
+    seen = 0
+    match self.a:
+        case seen if seen > 1:
+            pass
+        case _:
+            if seen != self.a:  # Bound by the case before, whose guard failed.
+                raise ValueError("invalid")
+    return self
+
+
 def class_pattern(self):
     match self.a:
         case int(value) if value > 1:
@@ -658,8 +680,10 @@ def class_pattern(self):
 
 
 def test_match_patterns_beyond_values_are_unsupported():
-    with pytest.raises(UnsupportedConstraint, match="other is read after the match"):
+    with pytest.raises(UnsupportedConstraint, match="other is read outside its binding case"):
         extract_validator(capture_after_match, {"a": INT})
+    with pytest.raises(UnsupportedConstraint, match="seen is read outside its binding case"):
+        extract_validator(capture_in_later_case, {"a": INT})
     with pytest.raises(UnsupportedConstraint, match="unsupported pattern MatchClass"):
         extract_validator(class_pattern, {"a": INT})
 
@@ -913,3 +937,20 @@ def test_external_enum_constants_cannot_run_custom_semantics():
 
     with pytest.raises(UnsupportedConstraint, match="standard semantics"):
         extract_validator(validator, {})
+
+
+class Launch(Enum):
+    FIRST = dt.datetime(2025, 1, 1, tzinfo=dt.UTC)
+    SECOND = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
+
+
+def launched_lately(self):
+    if self.a.value.year < 2026:
+        raise ValueError("invalid")
+    return self
+
+
+def test_enum_values_are_read_as_constants_are():
+    # An aware datetime value was taken, and failed only when the solver encoded it.
+    with pytest.raises(UnsupportedConstraint, match="aware datetime constants"):
+        extract_validator(launched_lately, {"a": Domain("enum", tuple(Launch))})

@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A `match` case that reads a name an earlier case captured is unsupported. A
+  capture stays bound when its guard fails, so the later case sees the captured
+  value, but modelfill read the value from before the match, and could call a
+  satisfiable model impossible.
+- Decimal arithmetic follows the Decimal context a fill runs in. A model compiled
+  once, under the context of its first use, so in a `localcontext()` with less
+  precision, a sum that Python rounds was taken as exact, and a satisfiable model
+  could be called impossible. Arithmetic that could pass the context's exponent
+  limits, where Python rounds a tiny result to zero, is unsupported as well.
+- A given value of a recursive `type` alias, such as `type Json = dict[str, Json] |
+  list[Json] | str | int | bool | None`, is kept, and any dicts in it that stand for
+  models are completed, instead of raising `RecursionError`.
+- A given value for a union is completed through a member of its shape, so
+  `Child | list[Child]` completes `[{}]`, and `list[Child] | Child` completes `{}`.
+  The first member with models took any value, and left one of another shape as it
+  was; a fixed-length tuple member read a dict's keys as its items.
+- A required nested model behind a `type` alias or a `NewType`, as in `child:
+  ChildAlias`, is solved with its parent, like one annotated directly. It was
+  completed on its own, so a parent's rule that read it was unsupported.
+- A `RootModel` whose `root` has an alias, its own or from an `alias_generator`,
+  fills. The value went in under the alias, as a dict that RootModel took for the
+  root.
+- An Enum member's `.value` or `.name` is checked as any constant is, so a rule
+  reading the value of an Enum of aware datetimes is unsupported instead of
+  raising `TypeError` when filling.
+
 ## 0.4.0
 
 Rules may read much more: `Decimal` fields with `decimal_places`, string methods,

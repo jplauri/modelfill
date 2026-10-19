@@ -1,7 +1,7 @@
 """Rules across nested models: required nested models are solved with their parent."""
 
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, NewType
 
 import pydantic
 import pytest
@@ -47,6 +47,30 @@ def test_impossibility_is_proven_across_levels_and_explained_by_path():
         assert part in str(raised.value)
     with pytest.raises(UnsatisfiableConstraints, match="age=200 conflict with holder.age <= 120"):
         fill(Ticket, holder={"age": 200})
+
+
+type Holder = Person
+Guest = NewType("Guest", Person)
+
+
+class AliasedTicket(BaseModel):
+    holder: Holder
+    guest: Guest
+    adult_only: bool
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.adult_only and (self.holder.age < 18 or self.guest.age < 21):
+            raise ValueError("adults only")
+        return self
+
+
+def test_a_nested_model_behind_an_alias_is_solved_with_its_parent():
+    # A type alias or NewType hid the nested model, which was completed on its own, so
+    # the rule could not read it and the fallback found nothing.
+    ticket = ModelFiller(AliasedTicket, mode="strict").fill(adult_only=True)
+    assert (ticket.holder.age, ticket.guest.age) == (18, 21)
+    assert ModelFiller(AliasedTicket).explain()["fields"]["holder"]["default"] == "nested model"
 
 
 def test_a_given_instance_is_kept_and_its_values_constrain_the_parent():

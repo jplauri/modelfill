@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import decimal
 import random
 import threading
 import types
@@ -63,13 +64,32 @@ class _Rejected(Exception):
     returned; anything else raised during construction is an error and propagates."""
 
 
+def _model(field: FieldSpec) -> type | None:
+    """The model a field holds, through NewTypes and type aliases, but not M | None."""
+    annotation = _resolve(field.annotation)[0]
+    return annotation if nested_model(annotation) is annotation else None
+
+
 def _relabel(label: str, prefix: str) -> str:
     """Field constraint labels start with the field, or len(field): prefix that field."""
     return f"len({prefix}{label[4:]}" if label.startswith("len(") else prefix + label
 
 
-@lru_cache(maxsize=128)
+def _context() -> tuple[int, int, int]:
+    """The Decimal context's precision and exponent limits. Its arithmetic rounds past
+    them, and Pydantic's multiple_of divides in them, so a compilation holds under
+    them only."""
+    context = decimal.getcontext()
+    return context.prec, context.Emin, context.Emax
+
+
 def _compile(model: type) -> _Compiled:
+    return _compile_under(model, _context())
+
+
+@lru_cache(maxsize=128)
+def _compile_under(model: type, context: tuple[int, int, int]) -> _Compiled:
+    """A model's compilation, cached by the Decimal context it is made under."""
     adapter = introspect(model)
     stack = _COMPILING.__dict__.setdefault("stack", [])
     stack.append(model)
@@ -94,8 +114,8 @@ def _compile_fields(model: type, adapter: Adapter, stack: list[type]) -> _Compil
                 unchecked.append(field.name)
             continue
         # Only a required nested model joins this solver; others are completed alone.
-        inner = nested_model(field.annotation)
-        if inner is not field.annotation or not field.required or inner in stack:
+        inner = _model(field)
+        if inner is None or not field.required or inner in stack:
             continue
         try:
             sub = _compile(inner)
@@ -205,8 +225,10 @@ def _leads(model: type, path: str) -> bool:
 class ModelFiller[T]:
     """Compile once, complete repeatedly, and validate every returned object.
 
-    ``strict`` rejects unsupported logic at initialization. ``auto`` (default)
-    performs bounded, validated fallback when unsupported logic is discovered.
+    ``strict`` rejects unsupported logic at initialization. A fill under another
+    Decimal context, which decides where Decimal arithmetic rounds, compiles the
+    model anew, and ``strict`` checks it there too. ``auto`` (default) performs
+    bounded, validated fallback when unsupported logic is discovered.
     Completions are canonical: the same inputs always give the same values, which
     are as boring as the rules allow. ``work_limit`` bounds each solver check in Z3
     resource units, which count work rather than time, so it decides the same way on
@@ -247,7 +269,10 @@ class ModelFiller[T]:
         self.work_limit = work_limit
         self.timeout_ms = timeout_ms
         self.providers = dict(providers or {})
-        self._compiled = _compile(model)
+        self._context = _context()
+        self._compiled = _compile_under(model, self._context)
+        # This filler's twins under other Decimal contexts, which compile anew.
+        self._twins: dict[tuple[int, int, int], ModelFiller[T]] = {}
         if mode == "strict" and self._compiled.unsupported:
             raise UnsupportedConstraint("; ".join(self._compiled.unsupported))
         for key, provider in self.providers.items():
@@ -271,6 +296,17 @@ class ModelFiller[T]:
             "work_limit": self.work_limit,
             "timeout_ms": self.timeout_ms,
         }
+
+    def _twin(self) -> ModelFiller[T] | None:
+        """This filler under the current Decimal context, unless that is its own."""
+        context = _context()
+        if context == self._context:
+            return None
+        if context not in self._twins:
+            twin = ModelFiller(self.model, **self._options, providers=self.providers)
+            twin._outer = self._outer
+            self._twins[context] = twin
+        return self._twins[context]
 
     def _solver(self) -> Solver:
         if not hasattr(self._local, "solver"):
@@ -299,6 +335,8 @@ class ModelFiller[T]:
         self, fixed_fields: dict[str, Any], count: int, rng: random.Random | None = None
     ) -> list[T]:
         """count validated completions: canonical ones, or explored with rng (Hypothesis)."""
+        if (twin := self._twin()) is not None:
+            return twin._complete(fixed_fields, count, rng)
         domains = self._compiled.domains
         self._compiled.adapter.check_fixed(fixed_fields)
         # The solver sees generated fields; external values go straight to the constructor.
@@ -589,7 +627,7 @@ class ModelFiller[T]:
                 inputs.update(known)
                 fresh.update(made)
                 continue
-            nested = nested_model(field.annotation)
+            nested = _model(field)
             if given is not MISSING:
                 # A dict that stands for a model, at any depth, is completed.
                 if isinstance(given, (dict, list, tuple)) and models_in(field.annotation):
@@ -607,7 +645,7 @@ class ModelFiller[T]:
                 if field.default_factory is None or issubclass(self.model, BaseModel):
                     continue  # The model's own default applies.
                 make = field.default_factory
-            elif nested is not None and nested is field.annotation:
+            elif nested is not None:
                 make = partial(self._fill_nested, name, nested, {})
             elif boring(field.annotation, field.metadata) is not MISSING:
                 make = partial(boring, field.annotation, field.metadata)
@@ -636,7 +674,7 @@ class ModelFiller[T]:
                 source = "provider"
             elif not field.required:
                 source = "model default"
-            elif nested_model(field.annotation) is field.annotation:
+            elif _model(field) is not None:
                 source = "nested model"
             elif boring(field.annotation, field.metadata) is not MISSING:
                 source = "boring value"
@@ -659,6 +697,8 @@ class ModelFiller[T]:
 
     def explain(self) -> dict[str, Any]:
         """Return fresh, JSON-friendly compilation and generation diagnostics."""
+        if (twin := self._twin()) is not None:
+            return twin.explain()
         compiled = self._compiled
         return {
             "model": self.model.__qualname__,

@@ -15,9 +15,10 @@ search that never claims impossibility.
   decorated again never runs its own). A dataclass gains no Pydantic validation:
   modelfill enforces only the solved field types, and `Annotated` metadata on a
   dataclass field is not a rule unless the dataclass's own code enforces it.
-- Required nested models, Pydantic or dataclass, are solved with their parent, so
-  its rules may read `self.customer.age`, and a dict fixes some of the nested
-  fields. Optional nested models and those with defaults are completed on their own.
+- Required nested models, Pydantic or dataclass, also behind a `NewType` or a
+  `type` alias, are solved with their parent, so its rules may read
+  `self.customer.age`, and a dict fixes some of the nested fields. Optional nested
+  models and those with defaults are completed on their own.
 - These constructor shapes fail explicitly: Pydantic dataclasses, dataclass
   `InitVar` and `init=False` fields, duplicate aliases, and alias paths through a
   list that Pydantic cannot replace with the field name.
@@ -169,8 +170,9 @@ parsed precedence.
   literal operand, and `%` and `//` by a positive integer literal.
 - Decimal arithmetic: `+`, `-`, unary `+` and `-`, and `*` with an integer or
   `Decimal` literal operand, integers mixed in. Each decimal read needs
-  `max_digits`, and no result may outgrow the decimal context's precision, so
-  Python never rounds it.
+  `max_digits`, and no result may outgrow the decimal context's precision or
+  exponent limits, so Python never rounds it. A filler compiles anew for each
+  context it fills in.
 - Date arithmetic, by Python's rules: `datetime ± timedelta`, `datetime - datetime`,
   `date ± timedelta` (whole days, like `timedelta.days`), `date - date`,
   `timedelta ± timedelta`, `timedelta * int` literal and `-timedelta`.
