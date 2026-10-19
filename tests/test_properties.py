@@ -255,11 +255,18 @@ def matches(first: str, second: str) -> st.SearchStrategy[str]:
     guards = conditions.map(" if {}".format)
     bodies = st.sampled_from(["raise ValueError('rejected')", "return self", "pass"])
     bodies |= conditions.map("if {}:\n                raise ValueError('rejected')".format)
+    bodies |= st.tuples(fields, operators, numbers, numbers, operators, fields).map(
+        lambda t: (  # Sets the local on one path, then reads it.
+            f"if {t[0]} {t[1]} {t[2]}:\n                seen = {t[3]}\n"
+            f"            if seen {t[4]} {t[5]}:\n                raise ValueError('rejected')"
+        )
+    )
     case = st.tuples(patterns, st.just("") | guards, bodies)
+    later = st.tuples(st.just("_") | patterns, st.just("") | guards, bodies)  # Often reached.
     cases = st.tuples(
         st.lists(case, max_size=1),
         st.tuples(captures, guards, bodies),
-        st.lists(case, min_size=1, max_size=2),
+        st.lists(later, min_size=1, max_size=2),
     ).map(lambda parts: [*parts[0], parts[1], *parts[2]])
 
     def render(parts: tuple[str, str, list[tuple[str, str, str]]]) -> str:
@@ -294,6 +301,11 @@ def validators(first: str, second: str) -> st.SearchStrategy[list[str]]:
 
 SHAPES = {  # The two reads, the solver fields they become, and an object Python validates.
     "flat": (validators("self.a", "self.b"), ("a", "b"), lambda a, b: SimpleNamespace(a=a, b=b)),
+    "matches": (  # Only match statements, whose branch state is the hardest to track.
+        st.lists(matches("self.a", "self.b"), min_size=1, max_size=2),
+        ("a", "b"),
+        lambda a, b: SimpleNamespace(a=a, b=b),
+    ),
     "nested": (
         validators("self.inner.a", "self.b"),
         ("inner.a", "b"),

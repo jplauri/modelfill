@@ -29,6 +29,10 @@
 - An Enum member's `.value` or `.name` is checked as any constant is, so a rule
   reading the value of an Enum of aware datetimes is unsupported instead of
   raising `TypeError` when filling.
+- A name an earlier `match` case captured stays unreadable in a later case where a
+  branch sets it on some paths only, as `if flag: seen = 5` does. Setting it on one
+  path made it readable on the other too, with the value from before the match, so
+  a satisfiable model could be called impossible.
 
 ## 0.4.0
 
