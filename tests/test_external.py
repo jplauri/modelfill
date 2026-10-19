@@ -389,18 +389,25 @@ def test_dicts_inside_given_collections_and_unions_are_completed():
 
 type Json = dict[str, Json] | list[Json] | str | int | bool | None
 type Catalog = dict[str, Line | Catalog]
+type Notes = dict[str, Annotated[Notes, Field(description="nested notes")]] | int
+type Shelf = dict[str, Annotated[Line | Shelf, Field(description="a line or a shelf")]]
 
 
 class Document(BaseModel):
     data: Json
     catalog: Catalog
+    notes: Notes  # Behind Annotated, the alias once slipped past the cycle check.
+    shelf: Shelf
 
 
 def test_recursive_type_aliases_are_read_once():
     # Looking for models in a recursive alias never ended, even in a given value.
-    document = fill(Document, data={"ok": [1, None]}, catalog={"a": {}, "b": {"c": {}}})
+    given = {"a": {}, "b": {"c": {}}}
+    notes = {"a": {"b": 1}}
+    document = fill(Document, data={"ok": [1, None]}, catalog=given, notes=notes, shelf=given)
     line = Line(sku="sku", quantity=1, id=NIL4)
-    assert (document.data, document.catalog) == ({"ok": [1, None]}, {"a": line, "b": {"c": line}})
+    assert (document.data, document.notes) == ({"ok": [1, None]}, notes)
+    assert document.catalog == document.shelf == {"a": line, "b": {"c": line}}
 
 
 class Alternatives(BaseModel):

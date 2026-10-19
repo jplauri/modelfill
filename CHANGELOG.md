@@ -36,6 +36,9 @@
 - A decimal `multiple_of` is unsupported in a Decimal context whose exponent
   limits are narrow enough to round a quotient to zero, such as `Emin=0`, where
   Pydantic takes 0.1 as a multiple of 10000. Such values were called impossible.
+- A recursive `type` alias that refers to itself through `Annotated`, as in
+  `dict[str, Annotated[Json, Field(description=...)]]`, is read once too, so a given
+  value of it no longer raises `RecursionError`.
 
 ## 0.4.0
 
