@@ -50,6 +50,10 @@
   `dict[str, Item]`, with `from_model` too, so its rules hold. `st.from_type`
   built it from independent fields, and a rule of `Item` that relates them made
   the draw fail with a raw `ValidationError`.
+- The README no longer says that every default factory runs once per fill call.
+  That holds for solved fields; a field the solver does not model keeps the model's
+  own default, whose factory Pydantic runs at each construction, more than once
+  where the search tries several candidates. A provider runs once per object.
 
 ## 0.4.0
 
