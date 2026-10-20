@@ -39,6 +39,10 @@
   many records as asked for. Once no solved candidate remains, members reuse
   earlier members' solved values in turn while provider values still differ. Only
   solved values counted, so such a model gave one record and then exhausted.
+- A case-insensitive pattern spells values in either case: under `(?i)`, a literal
+  or a character set matches the other case of what it names too. Only negated
+  sets did, so `(?i)^a{3}$` spelled `aaa` alone, and a rule that the value start
+  with `A` exhausted the search.
 
 ## 0.4.1
 

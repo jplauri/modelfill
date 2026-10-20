@@ -67,8 +67,8 @@ class _Unreadable(Exception):
 class _Chars:
     """The characters one step accepts: ranges and category tests, possibly negated.
 
-    Under (?i) a set also matches the other case, which only adds characters, except
-    that a negated set then leaves out the case variants of what it names too.
+    Under (?i) a set also matches the other case of what it names, and a negated set
+    leaves the other case out too.
     """
 
     def __init__(
@@ -90,13 +90,11 @@ class _Chars:
         )
 
     def __contains__(self, code: int) -> bool:
-        if not self.negate:
-            return self.named(code)
         variants = [code]
         if self.fold:
             char = chr(code)
             variants += [ord(other) for other in (char.lower(), char.upper()) if len(other) == 1]
-        return not any(map(self.named, variants))
+        return any(map(self.named, variants)) != self.negate
 
 
 class _Automaton:
@@ -168,7 +166,7 @@ class _Automaton:
 
     def item(self, op: Any, av: Any, state: int, fold: bool) -> int:
         if op is sre.LITERAL:
-            return self.step(_Chars([(av, av)]), state)
+            return self.step(_Chars([(av, av)], fold=fold), state)
         if op is sre.NOT_LITERAL:
             return self.step(_Chars([(av, av)], negate=True, fold=fold), state)
         if op is sre.ANY:  # Without the s flag, . is anything but a newline.
