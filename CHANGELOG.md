@@ -9,6 +9,11 @@
   them. A step between coarser operands took the finer grid without moving its
   value there, so `min(1, 2, Decimal("3.0"))` was 0.1, and valid values were called
   impossible.
+- A Decimal's `max_digits` and `decimal_places` past an `AfterValidator` are
+  unsupported metadata: Pydantic checks each of them alone there, while the grid
+  models them checked together, before any callback. Merged, they bounded the whole
+  digits by `max_digits - decimal_places`, which Pydantic applies only to settings
+  it checks together, so `123` was called impossible.
 
 ## 0.5.0
 

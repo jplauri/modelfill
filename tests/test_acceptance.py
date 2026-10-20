@@ -969,6 +969,29 @@ def test_metadata_holds_setting_by_setting_and_stage_by_stage():
     assert ModelFiller(Staged, mode="strict").fill().x == 1000
 
 
+class PlacesFirst(BaseModel):  # Pydantic checks max_digits alone, past the callback.
+    value: Annotated[
+        Decimal, Field(decimal_places=2), AfterValidator(unchanged), Field(max_digits=3)
+    ]
+
+
+class DigitsFirst(BaseModel):
+    value: Annotated[
+        Decimal, Field(max_digits=3), AfterValidator(unchanged), Field(decimal_places=2)
+    ]
+
+
+def test_decimal_settings_on_both_sides_of_a_callback_are_left_to_pydantic():
+    # Merged, they bounded the whole digits by max_digits - decimal_places, as Pydantic
+    # does only when it checks both together, so 123 was called impossible.
+    for model in (PlacesFirst, DigitsFirst):
+        with pytest.raises(UnsupportedConstraint):
+            ModelFiller(model, mode="strict")
+        assert fill(model, value=Decimal("123")).value == Decimal("123")
+    with pytest.raises(UnsupportedConstraint, match="max_digits past a callback"):
+        ModelFiller(PlacesFirst, mode="strict")
+
+
 def test_shared_filler_thread_safety():
     filler = ModelFiller(Meeting)
     with ThreadPoolExecutor(max_workers=4) as executor:

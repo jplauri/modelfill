@@ -325,13 +325,11 @@ def _applied(metadata: Iterable[Any]) -> tuple[list[Any], list[dict[str, Any]]]:
 
 
 def _grid(metadata: list[Any]) -> Domain | None:
-    """The domain of a Decimal that decimal_places puts on a grid. The last of each
-    setting holds, as in Pydantic, and fewer digits than places bound the places too:
-    max_digits=2 with decimal_places=3 allows 0.99 but not 0.099."""
-    settings: dict[str, Any] = {}
-    for item in metadata:
-        if type(item) is _GENERAL:
-            settings |= {key: value for key, value in vars(item).items() if value is not None}
+    """The domain of a Decimal that decimal_places puts on a grid, from the settings
+    before any callback, which Pydantic checks together. The last of each holds, and
+    fewer digits than places bound the places too: max_digits=2 with decimal_places=3
+    allows 0.99 but not 0.099. Past a callback it checks each alone, unmodeled here."""
+    settings = _applied(metadata)[1][0]
     places, digits = settings.get("decimal_places"), settings.get("max_digits")
     if type(places) is not int or places < 0:
         return None
@@ -364,9 +362,11 @@ def _metadata_constraints(
     items, generals = _applied(metadata)
     allowed = _SETTINGS.get(domain.kind, set())  # The domain or the pattern holds these.
     settings = {key for general in generals for key, value in general.items() if value is not False}
-    if not settings <= allowed:  # Code, such as to_upper, whose result a pattern may check.
-        unmodeled = ", ".join(sorted(settings - allowed))
-        unsupported.append(f"Field {name!r}: unsupported metadata {unmodeled}")
+    unmodeled = settings - allowed  # Code, such as to_upper, whose result a pattern may check.
+    if domain.kind == "decimal":  # The grid holds those checked together, before callbacks.
+        unmodeled |= {f"{key} past a callback" for g in generals[1:] for key in g.keys() & allowed}
+    if unmodeled:
+        unsupported.append(f"Field {name!r}: unsupported metadata {', '.join(sorted(unmodeled))}")
     elif patterns := [general["pattern"] for general in generals if "pattern" in general]:
         pattern = patterns[-1]  # Only checked: it never transforms a value.
     result = _rules(name, domain, expression, items, unsupported)
@@ -593,7 +593,7 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         # Unlike a constraint of one kind, every one of them runs.
         checks = [item.func for item in staged if isinstance(item, AfterValidator)]
         metadata = [item for item in staged if not isinstance(item, AfterValidator)]
-        domain = _domain(annotation, _grid(metadata))
+        domain = _domain(annotation, _grid(staged))
         validators += [
             ValidatorSpec(
                 getattr(check, "__name__", repr(check)),

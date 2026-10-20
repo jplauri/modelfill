@@ -205,6 +205,27 @@ def test_decimal_constraints_match_pydantic(data):
         pass
 
 
+DIGITS = st.integers(1, 4).map(lambda digits: Field(max_digits=digits))
+PLACES = st.integers(0, 3).map(lambda places: Field(decimal_places=places))
+
+
+@given(st.lists(DIGITS | PLACES | CALLBACK, min_size=1, max_size=4), st.data())
+def test_decimal_settings_around_callbacks_are_sound(items, data):
+    # Pydantic checks max_digits and decimal_places together before any callback, and
+    # each alone past one. modelfill may leave those to Pydantic, but must never call
+    # a value that Pydantic takes impossible.
+    model = create_model("Staged", value=(Annotated[Decimal, *items], ...))
+    value = data.draw(st.decimals(-1500, 1500, places=2))
+    filler = ModelFiller(model)
+    try:
+        expected = model(value=value)
+    except ValidationError:  # Off the grid, a value is an input error instead.
+        with pytest.raises((UnsatisfiableConstraints, GenerationExhausted, TypeError)):
+            filler.fill(value=value)
+    else:
+        assert filler.fill(value=value) == expected
+
+
 @given(st.data(), st.integers(1, 6), st.integers(-6, 0))
 def test_decimal_multiples_are_sound_in_small_contexts(data, prec, emin):
     # Pydantic's multiple_of divides in the context, where a quotient may round to a
