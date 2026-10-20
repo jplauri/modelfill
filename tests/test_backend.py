@@ -117,6 +117,22 @@ def test_exploration_ranges_stay_within_the_work_limit():
     assert scant.feasible_ranges(["x"]) == {}  # The same on any machine.
 
 
+def test_exploration_raises_where_the_wall_clock_decides(monkeypatch):
+    # Ranges and preferences were left out on any unknown, so where the wall clock
+    # decided, a replayed seed drew another value; only the work limit may leave them.
+    solver = Solver({"x": INT}, (), timeout_ms=1000, work_limit=10**6)
+    monkeypatch.setattr(z3.Optimize, "check", lambda self, *assumptions: z3.unknown)
+    monkeypatch.setattr(z3.Optimize, "reason_unknown", lambda self: "timeout")
+    with pytest.raises(SolverTimeout):
+        solver.feasible_ranges(["x"])
+    monkeypatch.setattr(solver.engine, "check", lambda: z3.unknown)
+    monkeypatch.setattr(solver.engine, "reason_unknown", lambda: "max. resource limit exceeded")
+    solver.prefer(solver.equal("x", 1))  # Skipped, as on any machine.
+    monkeypatch.setattr(solver.engine, "reason_unknown", lambda: "timeout")
+    with pytest.raises(SolverTimeout):
+        solver.prefer(solver.equal("x", 1))
+
+
 def test_exhaustion_after_candidate_blocking_is_not_proof():
     class Reject(BaseModel):
         flag: bool

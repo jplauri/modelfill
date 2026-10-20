@@ -375,21 +375,23 @@ canonical, and the random sampler is reachable only through `from_model`.
 
 `from_model` lets Hypothesis draw the fields a test cares about and any required
 external fields, then solves the rest with that sampler: seeded soft preferences
-in shuffled field order, discarded when infeasible. Integer, date and time
-targets land inside each field's feasible range and often on its edges, from one
-box-mode optimization per set of fixed inputs, plus one per optional field over
-its non-None values (adding "not None" to the shared query would force every
-optional field to be present at once). A missing bound, from an unbounded side
-or a timed-out query, falls back to steps from the other bound or a window
-around typical values. Choices are uniform, optional fields are `None` a quarter
-of the time, and strings are random lowercase text. Each example builds a fresh
-solver seeded from a Hypothesis draw, because an incremental solver's answers
-depend on its history; a fresh one makes every example a pure function of the
-draws, so failures replay and drawn fields shrink; the solved fields replay but
-do not shrink. Every check, the optimizer's that finds exploration's ranges
-included, is bounded by the work limit, which decides the same way on any
-machine; only where the wall-clock safety net fires first can a replay differ.
-A proven contradiction becomes `reject()`. Hypothesis counts that
+in shuffled field order, discarded when infeasible or left undecided by the work
+limit. Integer, date and time targets land inside each field's feasible range
+and often on its edges, from one box-mode optimization per set of fixed inputs,
+plus one per optional field over its non-None values (adding "not None" to the
+shared query would force every optional field to be present at once). A missing
+bound, from an unbounded side or a query that runs out of work, falls back to
+steps from the other bound or a window around typical values. Choices are
+uniform, optional fields are `None` a quarter of the time, and strings are
+random lowercase text. Each example builds a fresh solver seeded from a
+Hypothesis draw, because an incremental solver's answers depend on its history;
+a fresh one makes every example a pure function of the draws, so failures replay
+and drawn fields shrink; the solved fields replay but do not shrink. Every check
+is bounded by the work limit, which decides the same way on any machine, and the
+optimizer that finds the ranges by the work limit alone, as Z3 may report its
+wall clock as it does the work limit. Where the wall-clock safety net fires
+first, exploration raises `SolverTimeout`, so a replay never quietly draws
+another value. A proven contradiction becomes `reject()`. Hypothesis counts that
 as filtering, so drawn fields that are mostly impossible still trip its health
 check. The benefit is narrower: Hypothesis draws only the fields a test chooses,
 and modelfill solves the dependent ones, so complete objects never have to be

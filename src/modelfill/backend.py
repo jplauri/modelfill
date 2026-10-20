@@ -466,9 +466,10 @@ class Solver:
         if not names:
             return {}
         optimizer = z3.Optimize(ctx=self.context)
-        # The work limit decides, as for every check, so a seed replays the same ranges
-        # on any machine; the wall clock is only a safety net.
-        optimizer.set(priority="box", rlimit=self.work_limit, timeout=self.timeout_ms)
+        # Only the work limit bounds it, so a seed replays the same ranges on any machine:
+        # Z3 may report the wall clock as it does the work limit here, so a timeout could
+        # not be told apart, and without ranges a replay would draw another value.
+        optimizer.set(priority="box", rlimit=self.work_limit)
         optimizer.add(*self.engine.assertions(), *assumptions)
         objectives = {
             name: (
@@ -477,7 +478,10 @@ class Solver:
             )
             for name in names
         }
-        if optimizer.check() != z3.sat:
+        result = optimizer.check()
+        if result == z3.unknown and "timeout" in (reason := optimizer.reason_unknown()):
+            raise SolverTimeout(f"Z3 exhausted its budget: {reason}")
+        if result != z3.sat:
             return {}
         ranges = {}
         for name, extremes in objectives.items():
@@ -547,12 +551,15 @@ class Solver:
         return result
 
     def prefer(self, constraint: Any) -> None:
-        """Add a preference only after checking it; never a source of UNSAT."""
+        """Add a preference only after checking it; never a source of UNSAT. One left
+        undecided is skipped, as on any machine, unless the wall clock decided: then a
+        replay could keep it, so that raises."""
         try:
             if self.fits(constraint):
                 self.engine.add(constraint)
-        except SolverUnknown:
-            pass  # Exploration skips an undecided preference.
+        except SolverUnknown as error:
+            if "timeout" in str(error):  # Z3's reason for the wall clock, not the work limit.
+                raise
 
     def candidate(
         self,

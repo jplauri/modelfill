@@ -39,6 +39,12 @@
   Pydantic models, with its root value as the input. Built on its own, its
   validators read no field name, so one that checks `info.field_name` rejected
   every candidate.
+- Exploration in `from_model` raises `SolverTimeout` where the wall clock, not the
+  work limit, leaves a query undecided. The optimizer behind its ranges stopped at
+  either and then went on without ranges, and a preference was skipped the same
+  way, so on a slow machine a seed could replay as another value. The optimizer now
+  runs under the work limit alone, since Z3 may report both alike there, and a
+  preference is skipped only when the work limit decides.
 
 ## 0.5.0
 
