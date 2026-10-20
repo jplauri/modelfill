@@ -18,6 +18,12 @@
   when no entry before it matched, as Python stops at the first match. Every entry
   had to be, so `value.startswith(("x", self.prefix))` called `prefix=None` with
   `value="x"` impossible, and the canonical prefix was `"prefix"` instead of `None`.
+- A field's metadata is read as Pydantic applies it: the general settings, such as
+  `pattern` and `to_upper`, setting by setting, and an `AfterValidator` splitting it
+  into stages that all hold. A later `Field(pattern=...)` dropped an earlier
+  `StringConstraints(to_upper=True)` before modelfill saw it, so a model that
+  transforms its value was modeled and could be called impossible; and `ge=0` past a
+  callback dropped `ge=1000` before it, so filling proposed values below 1000.
 
 ## 0.4.1
 

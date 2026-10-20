@@ -18,6 +18,7 @@ from pydantic import (
     ConfigDict,
     Field,
     RootModel,
+    StringConstraints,
     ValidationError,
     ValidationInfo,
     create_model,
@@ -903,6 +904,41 @@ def test_pure_annotated_after_validators_are_modeled_like_field_validators():
     assert ModelFiller(AboveMinimum, mode="strict").fill(minimum=5).value == 6
     with pytest.raises(UnsupportedConstraint, match="return must preserve"):  # It transforms.
         ModelFiller(Doubled, mode="strict")
+
+
+def lower_a(value: str) -> str:
+    if value != "a":
+        raise ValueError("the value is a")
+    return value
+
+
+class Uppercased(BaseModel):  # Pydantic takes "a", then turns it into "A".
+    x: Annotated[
+        str, AfterValidator(lower_a), StringConstraints(to_upper=True), Field(pattern="^[A-Z]$")
+    ]
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.x != "A":
+            raise ValueError("the value is A")
+        return self
+
+
+def unchanged(value: int) -> int:
+    return value
+
+
+class Staged(BaseModel):  # Pydantic checks ge=1000, then the callback, then ge=0.
+    x: Annotated[int, Field(ge=1000), AfterValidator(unchanged), Field(ge=0)]
+
+
+def test_metadata_holds_setting_by_setting_and_stage_by_stage():
+    # A later pattern dropped the earlier to_upper before anything checked it, so this
+    # was modeled, and called impossible; and ge=0 past the callback dropped ge=1000.
+    with pytest.raises(UnsupportedConstraint, match="to_upper"):
+        ModelFiller(Uppercased, mode="strict")
+    assert fill(Uppercased).x == "A"  # Its pattern checks the value to_upper returns.
+    assert ModelFiller(Staged, mode="strict").fill().x == 1000
 
 
 def test_shared_filler_thread_safety():

@@ -202,6 +202,9 @@ def _domain(annotation: Any, grid: Domain | None = None) -> Domain | None:
 
 
 _SYMBOLS = {Gt: ">", Ge: ">=", Lt: "<", Le: "<="}
+# Pydantic's general metadata settings modelfill reads, by kind; any other is code,
+# such as to_upper, or a setting the solver does not model.
+_SETTINGS = {"decimal": {"max_digits", "decimal_places"}, "str": {"pattern"}}
 # Pydantic's class for constraints that annotated-types lacks, such as a pattern.
 _GENERAL = type(Field(pattern="x").metadata[0])
 
@@ -274,16 +277,21 @@ def _input_path(name: str, alias: Any, by_alias: bool, by_name: bool) -> tuple[s
     raise UnsupportedConstraint(f"Field {name!r}: an alias path through a list is unsupported")
 
 
-def _settings(item: Any) -> set[str]:
-    """The options set in Pydantic's general metadata."""
-    return {key for key, value in vars(item).items() if value is not None and value is not False}
-
-
-def _pattern(item: Any) -> Any:
-    """The pattern in Pydantic's general metadata, if nothing else there applies."""
-    if type(item) is not _GENERAL:
-        return None
-    return item.pattern if _settings(item) == {"pattern"} else None
+def _stages(metadata: Iterable[Any]) -> list[tuple[dict[type, Any], dict[str, Any]]]:
+    """Metadata as Pydantic applies it, in the stages its AfterValidators split it into:
+    in each, the last item of each kind holds, and of Pydantic's general metadata, such
+    as a pattern or to_upper, the last of each setting. A stage past a callback checks
+    the callback's result, so the constraints of every stage hold."""
+    stages: list[tuple[dict[type, Any], dict[str, Any]]] = [({}, {})]
+    for item in metadata:
+        kinds, general = stages[-1]
+        if isinstance(item, AfterValidator):
+            stages.append(({}, {}))
+        elif type(item) is _GENERAL:
+            general |= {key: value for key, value in vars(item).items() if value is not None}
+        else:
+            kinds[type(item)] = item
+    return stages
 
 
 def _grid(metadata: list[Any]) -> Domain | None:
@@ -318,13 +326,37 @@ def _metadata_constraints(
     name: str, domain: Domain, metadata: list[Any], unsupported: list[str]
 ) -> tuple[list[tuple[str, Expr]], Any]:
     """A field's own constraints, as (label, rule) pairs, and its pattern, or None,
-    from its flattened metadata."""
+    from its flattened metadata, AfterValidators included, which split it in stages."""
     result: list[tuple[str, Expr]] = []
     pattern = None
     expression = var(name, domain)
     # Pydantic keeps the last constraint of each kind, with Field() before Annotated[...]:
     # Field(ge=10) on an Annotated[int, Ge(0)] alias leaves ge=0 in force.
-    for item in {type(item): item for item in metadata}.values():
+    for kinds, general in _stages(metadata):
+        settings = {key for key, value in general.items() if value is not False}
+        allowed = _SETTINGS.get(domain.kind, set())  # The domain or the pattern holds these.
+        if not settings <= allowed:
+            unsupported.append(f"Field {name!r}: unsupported metadata {sorted(settings)}")
+        elif "pattern" in settings:
+            pattern = general["pattern"]  # Only checked: it never transforms a value.
+        result += _rules(name, domain, expression, kinds.values(), unsupported)
+    if domain.digits is not None:  # Pydantic counts digits: |units| < 10**max_digits.
+        low, high = (
+            const(decode("decimal", sign * 10**domain.digits, domain.scale)) for sign in (-1, 1)
+        )
+        within = node("and", node("lt", low, expression), node("lt", expression, high))
+        result.append((f"{name} has at most {domain.digits} digits", within))
+    if domain.nullable:  # Pydantic applies these constraints to non-None values only.
+        result = [(label, node("or", node("isnone", expression), rule)) for label, rule in result]
+    return result, pattern
+
+
+def _rules(
+    name: str, domain: Domain, expression: Expr, items: Iterable[Any], unsupported: list[str]
+) -> list[tuple[str, Expr]]:
+    """The rules of one stage's metadata items, apart from Pydantic's general metadata."""
+    result: list[tuple[str, Expr]] = []
+    for item in items:
         if isinstance(item, Strict):
             continue  # All generated/fixed inputs already have their canonical type.
         if isinstance(item, (Gt, Ge, Lt, Le)) and domain.kind in TIME_TYPES:
@@ -386,9 +418,6 @@ def _metadata_constraints(
                 node("eq", remainder, const(Decimal(0))),
             )
             result.append((f"{name} % {item.multiple_of} == 0", rule))
-        elif domain.kind == "decimal" and type(item) is _GENERAL:  # The domain holds these.
-            if not _settings(item) <= {"max_digits", "decimal_places"}:
-                unsupported.append(f"Field {name!r}: unsupported metadata {item!r}")
         elif isinstance(item, (MinLen, MaxLen)) and domain.kind == "str":
             minimum = isinstance(item, MinLen)
             value = item.min_length if minimum else item.max_length
@@ -398,19 +427,9 @@ def _metadata_constraints(
             symbol, operation = (">=", "ge") if minimum else ("<=", "le")
             length = node("len", expression, sort=INT)
             result.append((f"len({name}) {symbol} {value}", node(operation, length, const(value))))
-        elif domain.kind == "str" and (found := _pattern(item)) is not None:
-            pattern = found  # Only checked: it never transforms a value.
         else:
             unsupported.append(f"Field {name!r}: unsupported metadata {item!r}")
-    if domain.digits is not None:  # Pydantic counts digits: |units| < 10**max_digits.
-        low, high = (
-            const(decode("decimal", sign * 10**domain.digits, domain.scale)) for sign in (-1, 1)
-        )
-        within = node("and", node("lt", low, expression), node("lt", expression, high))
-        result.append((f"{name} has at most {domain.digits} digits", within))
-    if domain.nullable:  # Pydantic applies these constraints to non-None values only.
-        result = [(label, node("or", node("isnone", expression), rule)) for label, rule in result]
-    return result, pattern
+    return result
 
 
 def _pydantic_validators(
@@ -538,12 +557,12 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         pattern = None
         # Unpacked before anything reads it, so a group's own length limits override
         # the global ones, as in Pydantic.
-        metadata = _flatten([*inherited, *info.metadata])
+        staged = _flatten([*inherited, *info.metadata])
         # An AfterValidator gets the field's validated value, as a field validator does,
         # so it is analyzed as one: a pure check is modeled, anything else unsupported.
         # Unlike a constraint of one kind, every one of them runs.
-        checks = [item.func for item in metadata if isinstance(item, AfterValidator)]
-        metadata = [item for item in metadata if not isinstance(item, AfterValidator)]
+        checks = [item.func for item in staged if isinstance(item, AfterValidator)]
+        metadata = [item for item in staged if not isinstance(item, AfterValidator)]
         domain = _domain(annotation, _grid(metadata))
         validators += [
             ValidatorSpec(
@@ -572,10 +591,10 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
                 # A field's own length limit overrides the global configuration.
                 shortest, longest = config.get("str_min_length"), config.get("str_max_length")
                 if shortest is not None and not any(isinstance(m, MinLen) for m in metadata):
-                    metadata.append(MinLen(shortest))
+                    staged.append(MinLen(shortest))
                 if longest is not None and not any(isinstance(m, MaxLen) for m in metadata):
-                    metadata.append(MaxLen(longest))
-            rules, regex = _metadata_constraints(name, domain, metadata, unsupported)
+                    staged.append(MaxLen(longest))
+            rules, regex = _metadata_constraints(name, domain, staged, unsupported)
             constraints.extend(rules)
             if regex is not None:
                 pattern = Pattern(regex, config.get("regex_engine"))
