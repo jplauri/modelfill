@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
+
+Fixes from a third outside review. Impossibility claims hold where they did not: a
+nested model's proof under its parent's unsupported logic, a model validator that
+reads `info.field_name`, metadata that transforms a value behind a pattern, and a
+type that runs its own validation code no longer count as modeled. `batch()` tells
+members apart by provider values, `from_model` draws recursive aliases, and
+case-insensitive patterns spell either case.
+
+### Breaking changes
+
+- Strict mode refuses a model with an external field whose type runs its own
+  validation code: a type from outside Pydantic with a `__get_pydantic_core_schema__`
+  or `__get_validators__` hook, such as a custom type or one from
+  `pydantic_extra_types`, or code in metadata within the type. Such code may change
+  the model's other fields, so auto mode fills these models without proving
+  anything impossible.
+- `batch()` with providers may return members that share solved values and differ
+  in provider values, once no other solved values remain, where it raised
+  `GenerationExhausted`.
 
 ### Fixed
 
