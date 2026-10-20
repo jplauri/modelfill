@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from functools import lru_cache, partial
 from typing import Any, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, RootModel, ValidationError
 
 from .adapters import MISSING, Adapter, FieldSpec, _domain, _resolve, introspect
 from .backend import Solver
@@ -513,7 +513,18 @@ class ModelFiller[T]:
         return self.providers.get(options[0]) if len(options) == 1 else None
 
     def _assemble(self, values: dict[str, Any]) -> Any:
-        """Build each solved nested model from its fields' values, then this model."""
+        """Build this model from its fields' values, a solved nested model's by path."""
+        adapter = self._compiled.adapter
+        try:
+            return adapter.construct(self._own(values))
+        except adapter.rejections as exc:
+            raise _Rejected from exc
+
+    def _own(self, values: dict[str, Any]) -> dict[str, Any]:
+        """This model's field values, with each solved nested model's made from its paths.
+        A Pydantic model gets a nested Pydantic model as its input, which it validates in
+        place, as a given dict, so a validator there sees which field it is in; a
+        dataclass, which validates nothing, gets it built."""
         local = {name: value for name, value in values.items() if "." not in name}
         for name, model in self._compiled.nested:
             if name not in local:  # A given nested instance is used as it is.
@@ -523,12 +534,14 @@ class ModelFiller[T]:
                     for key, value in values.items()
                     if key.startswith(prefix)
                 }
-                local[name] = self._nested_filler(name, model)._assemble(inner)
-        adapter = self._compiled.adapter
-        try:
-            return adapter.construct(local)
-        except adapter.rejections as exc:
-            raise _Rejected from exc
+                nested = self._nested_filler(name, model)
+                if all(issubclass(kind, BaseModel) for kind in (self.model, model)) and not (
+                    issubclass(model, RootModel)  # Its input would be the root value.
+                ):
+                    local[name] = nested._compiled.adapter.inputs(nested._own(inner))
+                else:
+                    local[name] = nested._assemble(inner)
+        return local
 
     def _nested_inputs(
         self, name: str, model: type, given: Any

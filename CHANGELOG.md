@@ -9,6 +9,11 @@
   raises `GenerationExhausted`, and a given dict that cannot be completed goes to
   the parent's constructor as it is. A parent whose `before` validator replaces an
   impossible child was itself called impossible.
+- A model validator that reads `info.field_name` is unsupported: Pydantic passes it
+  the field its model is nested in, as `"refund"`, but modelfill read `None`, and
+  could call a valid nested value impossible. A solved nested Pydantic model is now
+  validated in its place in the parent, as a given dict is, rather than built alone
+  first, so such a validator sees the field it is in.
 
 ## 0.4.1
 

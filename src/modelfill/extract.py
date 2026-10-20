@@ -542,7 +542,11 @@ class _Analyzer:
             # A class constant through self or cls: Pydantic sets no ClassVar on an instance.
             owner = syntax.value
             if isinstance(owner, ast.Name) and owner.id == self.info_name:
-                if syntax.attr == "field_name":  # None in a model validator, as in Pydantic.
+                if syntax.attr == "field_name":
+                    if self.field_name is None:  # The field it is nested in, else None.
+                        raise self.unsupported(
+                            syntax, "a model validator's info.field_name depends on its parent"
+                        )
                     return const(self.field_name)
             if (
                 isinstance(owner, ast.Name)

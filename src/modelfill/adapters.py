@@ -137,8 +137,8 @@ class Adapter:
     unsupported: tuple[str, ...]
     constants: dict[str, Any] = dataclasses.field(default_factory=dict)  # Its ClassVars.
 
-    def construct(self, values: dict[str, Any]) -> Any:
-        """Run the model's real constructor, including its original validators."""
+    def inputs(self, values: dict[str, Any]) -> dict[str, Any]:
+        """The constructor's keyword arguments for these field values, by input path."""
         inputs: dict[str, Any] = {}
         for field in self.fields:
             if field.name in values:
@@ -147,7 +147,11 @@ class Adapter:
                 for key in outer:  # An AliasPath reads the value from nested dicts.
                     target = target.setdefault(key, {})
                 target[last] = values[field.name]
-        return self.model(**inputs)
+        return inputs
+
+    def construct(self, values: dict[str, Any]) -> Any:
+        """Run the model's real constructor, including its original validators."""
+        return self.model(**self.inputs(values))
 
     @property
     def rejections(self) -> tuple[type[Exception], ...]:
