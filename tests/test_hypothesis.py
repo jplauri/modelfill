@@ -142,6 +142,29 @@ def test_models_inside_fields_are_drawn_with_their_rules():
     assert all(step.end == step.start + 1 for step in steps)
 
 
+type Path = Step | list[Path]
+
+
+class Trail(BaseModel):
+    path: Path
+
+
+def steps_in(path):
+    return [path] if isinstance(path, Step) else [step for part in path for step in steps_in(part)]
+
+
+def test_a_recursive_type_is_drawn_lazily_and_a_given_strategy_is_not_inferred():
+    # Inferring a strategy for the alias never ended, even for a field given one.
+    trail = find(
+        from_model(Trail),
+        lambda trail: isinstance(trail.path, list) and steps_in(trail.path),
+        settings=settings(REPLAYABLE, phases=[Phase.generate]),
+    )
+    assert all(step.end == step.start + 1 for step in steps_in(trail.path))
+    given = Step(start=0, end=1)
+    assert find(from_model(Trail, path=st.just(given)), bool, settings=REPLAYABLE).path == given
+
+
 class Coded(BaseModel):
     code: str = Field(pattern=r"^[A-Z]{3}-\d{2}$")
     count: int = Field(ge=0)

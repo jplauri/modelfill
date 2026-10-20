@@ -30,6 +30,10 @@
   code gets the model's data so far and may change a solved field between two
   rules, which were then taken as true of one value and could be called impossible.
   Models with such fields now fall back, and strict mode refuses them.
+- `from_model` no longer recurses forever on a recursive type alias that holds
+  models, such as `type Tree = Leaf | list[Tree]`: its strategy draws itself again
+  lazily where the type recurs. A field given a strategy is not inferred at all, so
+  passing one no longer runs into the same recursion.
 
 ## 0.4.1
 
