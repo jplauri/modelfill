@@ -185,9 +185,11 @@ under paths such as `customer.age`, at the nested field's place in declaration
 order, so the parent's rules can read `self.customer.age` and fixing either side
 can determine the other. The extractor resolves such attribute chains to those
 paths; reading the nested object as a whole stays unsupported, because the
-solver only knows its fields. Construction builds each nested object from its
-solved values and its own external fields, innermost first, then the parent. A
-given nested instance is used as it is, and its solved values become fixed, so
+solver only knows its fields. Construction gives a Pydantic parent a nested
+Pydantic model's input, its solved values and its own external fields as a dict,
+or a RootModel's root value, which the parent validates in place, so a validator
+there sees which field it is in. Where either is a dataclass, the nested object is
+built first, innermost first. A given nested instance is used as it is, and its solved values become fixed, so
 the parent's rules see them. Pydantic does not validate it again by default, so
 an instance that breaks its own model's rules, such as one keeping an unchecked
 default, would turn those rules into a false contradiction; it is refused as an

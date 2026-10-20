@@ -35,6 +35,10 @@
   the turn counted reused members too, so a value came back out of turn and some
   combinations with provider values were never tried. A provider repeating a value
   no longer ends the batch, and neither does a pattern with no string left.
+- A nested RootModel is validated in its parent's place, like other nested
+  Pydantic models, with its root value as the input. Built on its own, its
+  validators read no field name, so one that checks `info.field_name` rejected
+  every candidate.
 
 ## 0.5.0
 

@@ -574,8 +574,8 @@ class ModelFiller[T]:
     def _own(self, values: dict[str, Any]) -> dict[str, Any]:
         """This model's field values, with each solved nested model's made from its paths.
         A Pydantic model gets a nested Pydantic model as its input, which it validates in
-        place, as a given dict, so a validator there sees which field it is in; a
-        dataclass, which validates nothing, gets it built."""
+        place, as a given dict or a RootModel's root value, so a validator there sees
+        which field it is in; a dataclass, which validates nothing, gets it built."""
         local = {name: value for name, value in values.items() if "." not in name}
         for name, model in self._compiled.nested:
             if name not in local:  # A given nested instance is used as it is.
@@ -586,11 +586,13 @@ class ModelFiller[T]:
                     if key.startswith(prefix)
                 }
                 nested = self._nested_filler(name, model)
-                if all(issubclass(kind, BaseModel) for kind in (self.model, model)) and not (
-                    issubclass(model, RootModel)  # Its input would be the root value.
-                ):
-                    local[name] = nested._compiled.adapter.inputs(nested._own(inner))
-                else:
+                pydantic = all(issubclass(kind, BaseModel) for kind in (self.model, model))
+                own = nested._own(inner) if pydantic else {}
+                if pydantic and not issubclass(model, RootModel):
+                    local[name] = nested._compiled.adapter.inputs(own)
+                elif pydantic and "root" in own:
+                    local[name] = own["root"]
+                else:  # By a dataclass, or by a RootModel for its own default root.
                     local[name] = nested._assemble(inner)
         return local
 

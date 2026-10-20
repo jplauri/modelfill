@@ -873,6 +873,30 @@ def test_a_model_validators_field_name_is_unsupported():
         assert fill(Receipt, refund={"value": -1}) == expected
 
 
+class Refunded(RootModel[int]):
+    @model_validator(mode="after")
+    def check(self, info):
+        if info.field_name != "refund":
+            raise ValueError("only a refund")
+        return self
+
+
+class Credit(BaseModel):
+    refund: Refunded
+
+
+def test_a_nested_root_model_is_validated_in_its_parents_place():
+    # Built on its own, it had no field name, so every candidate was rejected.
+    filler = ModelFiller(Credit, max_attempts=3)
+    try:
+        expected = Credit(refund=0)
+    except ValidationError:  # Pydantic 2.10 passed None.
+        with pytest.raises(GenerationExhausted):
+            filler.fill()
+    else:
+        assert filler.fill() == expected
+
+
 def test_field_validator_earlier_field_reads():
     filler = ModelFiller(FieldDependency, mode="strict")
     assert filler.fill(lower=19).upper == 20
