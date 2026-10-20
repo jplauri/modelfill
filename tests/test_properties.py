@@ -16,7 +16,15 @@ import pytest
 from annotated_types import Ge, Gt, Le, Lt, MaxLen, MinLen, MultipleOf
 from hypothesis import assume, given
 from hypothesis import strategies as st
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError, create_model, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    create_model,
+    model_validator,
+)
 
 from examples.meeting import Meeting
 from modelfill import (
@@ -117,6 +125,12 @@ def test_solver_date_and_time_parts_match_python(value):
                 assert not solver.fits(term != encode(getattr(value, name)())), name
 
 
+def unchanged(value):
+    return value
+
+
+# A pure check between constraints, which then hold on both sides of it.
+CALLBACK = st.just(AfterValidator(unchanged))
 METADATA = {  # Annotated items, Field() arguments and values to try, per base type.
     int: (
         st.one_of(
@@ -125,12 +139,13 @@ METADATA = {  # Annotated items, Field() arguments and values to try, per base t
             SMALL.map(Le),
             SMALL.map(Lt),
             st.integers(1, 5).map(MultipleOf),
+            CALLBACK,
         ),
         st.dictionaries(st.sampled_from(["ge", "gt", "le", "lt"]), SMALL, max_size=2),
         st.integers(-10, 10),
     ),
     str: (
-        st.one_of(LENGTHS.map(MinLen), LENGTHS.map(MaxLen)),
+        st.one_of(LENGTHS.map(MinLen), LENGTHS.map(MaxLen), CALLBACK),
         st.dictionaries(st.sampled_from(["min_length", "max_length"]), LENGTHS, max_size=2),
         st.text("ab", max_size=8),
     ),
