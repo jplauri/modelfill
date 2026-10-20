@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.4.1
+
+Fixes from two outside reviews. Impossibility claims hold where they did not:
+constructs that were modeled wrongly, such as reading a `match` capture after its
+guard failed, or Decimal arithmetic that the context rounds, are unsupported
+instead, so strict mode refuses them. Recursive aliases, same-shaped union members,
+nested models behind aliases, and models inside fields that `from_model` draws work
+too.
 
 ### Fixed
 
