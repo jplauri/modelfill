@@ -564,6 +564,25 @@ def test_rules_may_test_how_strings_start_and_end():
         fill(Catalog, filename="data.json")
 
 
+class Prefixed(BaseModel):
+    value: str
+    prefix: str | None
+
+    @model_validator(mode="after")
+    def check(self):
+        if not self.value.startswith(("x", self.prefix)):
+            raise ValueError("value needs the prefix")
+        return self
+
+
+def test_a_none_past_a_matching_affix_is_never_read():
+    # Python stops at the first entry that matches, but every entry had to be a string:
+    # prefix=None was called impossible, and the canonical prefix was "prefix".
+    filler = ModelFiller(Prefixed, mode="strict")
+    assert filler.fill(value="x", prefix=None).prefix is None
+    assert filler.fill(value="x").prefix is None
+
+
 class Labels(BaseModel):
     sku: str
     filename: str

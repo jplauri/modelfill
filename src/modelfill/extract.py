@@ -753,13 +753,19 @@ class _Analyzer:
 
     def affix(self, method: str, text: ast.expr, argument: ast.expr, syntax: ast.AST) -> Expr:
         """text.startswith(argument) or text.endswith(argument), where the argument is a
-        string or a literal tuple of them, any of which will do."""
+        string or a literal tuple of them, any of which will do. Python reads the tuple
+        in order and stops at a match, so a None in it raises only past the matches."""
         value = self.present(self.expression(text))  # None has no such method.
         options = argument.elts if isinstance(argument, ast.Tuple) else [argument]
-        affixes = [self.present(self.expression(option)) for option in options]
+        affixes = [self.expression(option) for option in options]
         if any(part.sort.kind != "str" for part in (value, *affixes)):
             raise self.unsupported(syntax, f"{method}() needs strings")
-        return _or(*(node(method, value, affix) for affix in affixes))
+        matches: list[Expr] = []
+        for affix in affixes:
+            if affix.sort.nullable:  # Unless an entry before it matched.
+                self.requires.append(_or(*matches, _not(node("isnone", affix))))
+            matches.append(node(method, value, affix))
+        return _or(*matches)
 
     def choice(self, condition: Expr, yes: Expr, no: Expr, syntax: ast.AST) -> Expr:
         """yes where condition holds, else no: two values of one supported type, or

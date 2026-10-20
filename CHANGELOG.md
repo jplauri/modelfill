@@ -14,6 +14,10 @@
   could call a valid nested value impossible. A solved nested Pydantic model is now
   validated in its place in the parent, as a given dict is, rather than built alone
   first, so such a validator sees the field it is in.
+- `startswith()` and `endswith()` with a tuple require an entry to be a string only
+  when no entry before it matched, as Python stops at the first match. Every entry
+  had to be, so `value.startswith(("x", self.prefix))` called `prefix=None` with
+  `value="x"` impossible, and the canonical prefix was `"prefix"` instead of `None`.
 
 ## 0.4.1
 

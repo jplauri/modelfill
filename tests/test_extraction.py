@@ -310,6 +310,18 @@ def affixes(self):
     return self
 
 
+def optional_affix(self):
+    if not self.a.startswith(("a", self.b)):  # A None past a match is never read.
+        raise ValueError("invalid")
+    return self
+
+
+def optional_affix_first(self):
+    if self.a.endswith((self.b, "b")):  # Before every match, it is.
+        raise ValueError("invalid")
+    return self
+
+
 def substrings(self):
     if "c" in self.a and self.b not in self.a:
         raise ValueError("invalid")
@@ -508,6 +520,8 @@ SCHEDULE_GRID = {
 }
 TEXTS = ("", "x", "ok", "no", "😀")
 AFFIXED = ("", "b", "ab", "abc", "cab", "😀b")
+MAYBE_AFFIX = {"a": STR, "b": Domain("str", nullable=True)}
+MAYBE_AFFIXED = {"a": AFFIXED, "b": (None, "", "b", "ab")}
 COLORS = Domain("enum", tuple(Color))
 NUMBERS = Domain("enum", tuple(Number))
 # Literal subsets must still encode members by their position in the whole Enum.
@@ -548,6 +562,8 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
         (boolean_numbers, {"a": BOOL, "b": INT}, {"a": (False, True), "b": range(-1, 3)}),
         (text_conditions, {"a": STR, "b": STR}, {"a": TEXTS, "b": TEXTS}),
         (affixes, {"a": STR, "b": STR}, {"a": AFFIXED, "b": AFFIXED}),
+        (optional_affix, MAYBE_AFFIX, MAYBE_AFFIXED),
+        (optional_affix_first, MAYBE_AFFIX, MAYBE_AFFIXED),
         (substrings, {"a": STR, "b": STR}, {"a": AFFIXED, "b": AFFIXED}),
         (enum_validation, {"a": COLORS, "b": NUMBERS}, {"a": Color, "b": Number}),
         (literal_subsets, BLUE_ONLY, {"a": (Color.BLUE,), "b": Color}),
