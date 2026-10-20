@@ -106,6 +106,17 @@ def test_preferences_never_add_hard_bounds():
         assert solver.candidate({}, {}, random.Random(2))["x"] >= 10**100
 
 
+def test_exploration_ranges_stay_within_the_work_limit():
+    # The optimizer behind exploration's ranges had only the wall-clock timeout, so a
+    # slow machine could find other ranges, and a replayed seed draw another value.
+    x = var("x", INT)
+    rule = node("and", node("ge", x, const(3)), node("le", x, const(7)))
+    ample = Solver({"x": INT}, [rule], timeout_ms=10**4, work_limit=10**6)
+    assert ample.feasible_ranges(["x"]) == {"x": (3, 7)}
+    scant = Solver({"x": INT}, [rule], timeout_ms=10**4, work_limit=1)
+    assert scant.feasible_ranges(["x"]) == {}  # The same on any machine.
+
+
 def test_exhaustion_after_candidate_blocking_is_not_proof():
     class Reject(BaseModel):
         flag: bool

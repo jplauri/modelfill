@@ -378,7 +378,10 @@ of the time, and strings are random lowercase text. Each example builds a fresh
 solver seeded from a Hypothesis draw, because an incremental solver's answers
 depend on its history; a fresh one makes every example a pure function of the
 draws, so failures replay and drawn fields shrink; the solved fields replay but
-do not shrink. A proven contradiction becomes `reject()`. Hypothesis counts that
+do not shrink. Every check, the optimizer's that finds exploration's ranges
+included, is bounded by the work limit, which decides the same way on any
+machine; only where the wall-clock safety net fires first can a replay differ.
+A proven contradiction becomes `reject()`. Hypothesis counts that
 as filtering, so drawn fields that are mostly impossible still trip its health
 check. The benefit is narrower: Hypothesis draws only the fields a test chooses,
 and modelfill solves the dependent ones, so complete objects never have to be

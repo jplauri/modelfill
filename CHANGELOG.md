@@ -43,6 +43,10 @@
   or a character set matches the other case of what it names too. Only negated
   sets did, so `(?i)^a{3}$` spelled `aaa` alone, and a rule that the value start
   with `A` exhausted the search.
+- The optimizer that finds the ranges `from_model` explores is bounded by the work
+  limit, as every other check is, not by the wall-clock timeout alone, so whether
+  it finds them no longer depends on the machine's speed, and a seed replays the
+  same values.
 
 ## 0.4.1
 
