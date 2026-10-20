@@ -294,6 +294,14 @@ def decimal_comparisons(self):
     return self
 
 
+def mixed_extremes(self):  # Coarser operands come first, then a finer one.
+    if min(1, self.b, self.a) < Decimal("0.05") or max(0, self.b, self.a) == self.b:
+        raise ValueError("invalid")
+    if max(-1, 0, self.a) > min(self.b, 2, self.a, Decimal("1.5")):
+        raise ValueError("invalid")
+    return self
+
+
 def decimal_arithmetic(self):
     if self.a + self.b * 2 > Decimal("3.5") or -self.a == self.b - 1:
         raise ValueError("invalid")
@@ -558,6 +566,7 @@ ZERO_FIRST = {"a": Domain("enum", (Number.ZERO,)), "b": NUMBERS, "c": NUMBERS}
             {"a": CLOCK["a"], "b": CLOCK["b"], "d": [date.min, date(2025, 1, 2), date.max]},
         ),
         (decimal_comparisons, PRICES, PRICE_GRID),
+        (mixed_extremes, PRICES, PRICE_GRID),
         (decimal_arithmetic, LEDGER, PRICE_GRID),
         (boolean_numbers, {"a": BOOL, "b": INT}, {"a": (False, True), "b": range(-1, 3)}),
         (text_conditions, {"a": STR, "b": STR}, {"a": TEXTS, "b": TEXTS}),

@@ -34,9 +34,10 @@ _INTEGERS = {
 }
 
 
-def _aligned(terms: Sequence[Any], exprs: Sequence[Expr]) -> list[Any]:
-    """Numbers' terms in units of the finest decimal grid among them; an int's is 1."""
-    scale = max(expr.sort.scale for expr in exprs)
+def _aligned(terms: Sequence[Any], exprs: Sequence[Expr], scale: int | None = None) -> list[Any]:
+    """Numbers' terms in units of a decimal grid, the finest among them unless given; an
+    int's is 1."""
+    scale = max(expr.sort.scale for expr in exprs) if scale is None else scale
     return [
         term * 10 ** (scale - expr.sort.scale) if expr.sort.scale < scale else term
         for term, expr in zip(terms, exprs, strict=True)
@@ -230,8 +231,10 @@ class Solver:
         if op == "not":
             return z3.Not(args[0])
         if op == "ite":
-            if expr.sort.kind == "decimal":  # Both branches on the result's grid.
-                args = [args[0], *_aligned(args[1:], expr.args[1:])]
+            # Both branches on the result's grid, which may be finer than theirs: a step of
+            # min(1, 2, Decimal("3.0")) holds tenths.
+            if expr.sort.kind == "decimal":
+                args = [args[0], *_aligned(args[1:], expr.args[1:], expr.sort.scale)]
             return z3.If(*args)
         if op == "len":
             return z3.Length(args[0])

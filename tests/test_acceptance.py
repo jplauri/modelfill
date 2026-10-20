@@ -478,6 +478,28 @@ def test_decimal_rules_order_and_test_values():
     assert (str(quote.price), str(quote.fee)) == ("9.99", "0.1")
 
 
+class Cheapest(BaseModel):  # Two tenths come before hundredths.
+    first: Decimal = Field(decimal_places=1)
+    second: Decimal = Field(decimal_places=1)
+    cap: Decimal = Field(decimal_places=2)
+    chosen: Decimal = Field(decimal_places=2)
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.chosen != min(self.first, self.second, self.cap):
+            raise ValueError("the cheapest is chosen")
+        return self
+
+
+def test_the_least_of_mixed_decimal_grids_keeps_its_value():
+    # A step of min() took the finest grid without its value moving there: 1.0 became
+    # 0.10, and a valid choice of 1.00 was called impossible.
+    fixed = {"first": Decimal("1.0"), "second": Decimal("2.0"), "cap": Decimal("3.00")}
+    filler = ModelFiller(Cheapest, mode="strict")
+    assert filler.fill(**fixed, chosen=Decimal("1.00")) == Cheapest(**fixed, chosen=Decimal("1.00"))
+    assert filler.fill(**fixed).chosen == Decimal("1.00")
+
+
 class Taxed(BaseModel):
     price: Decimal = Field(max_digits=8, decimal_places=2, gt=0)
     tax: Decimal = Field(max_digits=8, decimal_places=2)

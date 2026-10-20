@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `min()` and `max()` of three or more numbers keep their values when decimal grids
+  mix: each step's result is on the grid of all the operands, as Python compares
+  them. A step between coarser operands took the finer grid without moving its
+  value there, so `min(1, 2, Decimal("3.0"))` was 0.1, and valid values were called
+  impossible.
+
 ## 0.5.0
 
 Fixes from a third outside review. Impossibility claims hold where they did not: a
