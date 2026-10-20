@@ -94,7 +94,7 @@ def models_in(annotation: Any, outer: tuple[Any, ...] = ()) -> list[type]:
     annotation = _resolve(annotation)[0]
     if any(annotation is seen for seen in outer):
         return []  # Its models are those found where it was read first.
-    if nested_model(annotation) is annotation:
+    if annotation is not None and nested_model(annotation) is annotation:  # Not Literal[None].
         return [annotation]
     outer += (annotation,)
     return [model for arg in get_args(annotation) for model in models_in(arg, outer)]

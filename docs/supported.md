@@ -18,7 +18,8 @@ search that never claims impossibility.
 - Required nested models, Pydantic or dataclass, also behind a `NewType` or a
   `type` alias, are solved with their parent, so its rules may read
   `self.customer.age`, and a dict fixes some of the nested fields. Optional nested
-  models and those with defaults are completed on their own.
+  models and those with defaults are completed on their own, but unsupported logic
+  in them, or in models in a collection or a union, counts for a Pydantic parent.
 - These constructor shapes fail explicitly: Pydantic dataclasses, dataclass
   `InitVar` and `init=False` fields, duplicate aliases, and alias paths through a
   list that Pydantic cannot replace with the field name.

@@ -198,7 +198,11 @@ Unsupported logic inside a nested model counts for the whole object: an unknown
 hook there could change values the parent's rules read, so every predicate is
 demoted to guidance, as for unsupported logic in the parent itself. Optional
 nested models and those with defaults are completed on their own, and a rule
-that reads one is unsupported. A model that contains itself is never solved this
+that reads one is unsupported. Their unsupported logic, like that of models in a
+collection or a union, still counts for a Pydantic parent: they validate inside it,
+where a model validator gets the parent's data so far and may change it. A walk
+over the cached compilations gathers that logic, so in a cycle of models each one
+counts the others' whichever was compiled first. A model that contains itself is never solved this
 way, so filling it reports the problem. The reverse holds too: unsupported logic
 in the parent may change or bypass a nested value, so a nested model completed on
 its own proves nothing impossible about the parent, and a given value that cannot

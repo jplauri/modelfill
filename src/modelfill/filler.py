@@ -7,7 +7,7 @@ import random
 import threading
 import types
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache, partial
 from typing import Any, Literal, Union, get_args, get_origin
 
@@ -164,6 +164,38 @@ def _compile_fields(model: type, adapter: Adapter, stack: list[type]) -> _Compil
     )
 
 
+@lru_cache(maxsize=128)
+def _compile_whole(model: type, context: tuple[int, int, int]) -> _Compiled:
+    """A model's compilation with the unsupported logic of every model that a Pydantic
+    model in it holds outside its solver, at any depth: optional, defaulted, or in a
+    collection or a union. Completed on its own, such a model still validates inside
+    its parent, where its model validators get the parent's data so far, which they
+    may change. A walk over cached compilations, so a cycle of models counts all of
+    them whichever was compiled first."""
+    compiled = _compile_under(model, context)
+    reasons: list[str] = []
+    seen, todo = {model}, [(model, "")]
+    while todo:
+        current, prefix = todo.pop()
+        inner = _compile_under(current, context)
+        solved = dict(inner.nested)  # Their logic counts in their parent's compilation.
+        for field in inner.adapter.fields:
+            if field.name in solved:
+                todo.append((solved[field.name], f"{prefix}{field.name}."))
+            elif issubclass(current, BaseModel):
+                for held in models_in(field.annotation):
+                    if held in seen:
+                        continue
+                    seen.add(held)
+                    try:
+                        sub = _compile_under(held, context)
+                    except UnsupportedConstraint:
+                        continue  # Filling reports why this model cannot be completed.
+                    reasons += [f"{prefix}{field.name}: {reason}" for reason in sub.unsupported]
+                    todo.append((held, f"{prefix}{field.name}: "))
+    return replace(compiled, unsupported=compiled.unsupported + tuple(reasons))
+
+
 def _label(function: Any) -> str:
     """A validator as named in explanations, with the line where its definition starts."""
     code = getattr(function, "__code__", None)
@@ -270,7 +302,7 @@ class ModelFiller[T]:
         self.timeout_ms = timeout_ms
         self.providers = dict(providers or {})
         self._context = _context()
-        self._compiled = _compile_under(model, self._context)
+        self._compiled = _compile_whole(model, self._context)
         # This filler's twins under other Decimal contexts, which compile anew.
         self._twins: dict[tuple[int, int, int], ModelFiller[T]] = {}
         if mode == "strict" and self._compiled.unsupported:

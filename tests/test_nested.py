@@ -328,3 +328,61 @@ def test_a_given_instance_must_keep_its_own_rules():
         filler.fill(account=Account())
     with pytest.raises(UnsatisfiableConstraints):  # A valid instance the parent rejects.
         filler.fill(account=Account(balance=5))
+
+
+class Meddler(BaseModel):  # Its model validator gets the parent's data, and changes it.
+    x: int = 0
+
+    @model_validator(mode="after")
+    def meddle(self, info):
+        if info.data is not None:
+            info.data["a"] = 1
+        return self
+
+
+class Meddled(BaseModel):  # Pydantic takes a=0, which a Meddler turns into 1.
+    a: int
+
+    @field_validator("a")
+    @classmethod
+    def starts_at_zero(cls, value):
+        if value != 0:
+            raise ValueError("a starts at 0")
+        return value
+
+    @model_validator(mode="after")
+    def ends_at_one(self):
+        if self.a != 1:
+            raise ValueError("a ends at 1")
+        return self
+
+
+class MaybeMeddled(Meddled):
+    child: Meddler | None = None
+
+
+class ListMeddled(Meddled):
+    children: list[Meddler]
+
+
+class CycleMeddled(Meddled):
+    child: "CycleMeddler | None" = None
+
+
+class CycleMeddler(Meddler):
+    parents: list[CycleMeddled] = []
+
+
+CycleMeddled.model_rebuild()
+
+
+def test_unsupported_logic_in_any_nested_model_counts_for_the_parent():
+    # Only a required nested model's counted, so the parent's two rules were taken as
+    # true of one value of a, and called impossible.
+    for model, given in ((MaybeMeddled, {"child": {}}), (ListMeddled, {"children": [{}]})):
+        with pytest.raises(UnsupportedConstraint, match="Meddler.meddle"):
+            ModelFiller(model, mode="strict")
+        assert fill(model, **given).a == 1
+    ModelFiller(CycleMeddler)  # Compiled first, it meets its parent in a cycle.
+    with pytest.raises(UnsupportedConstraint, match="Meddler.meddle"):
+        ModelFiller(CycleMeddled, mode="strict")

@@ -14,6 +14,11 @@
   models them checked together, before any callback. Merged, they bounded the whole
   digits by `max_digits - decimal_places`, which Pydantic applies only to settings
   it checks together, so `123` was called impossible.
+- Unsupported logic in a nested model completed on its own, one that is optional,
+  defaulted, or in a collection or a union, counts for a Pydantic parent too.
+  Pydantic validates it inside the parent, where its model validators get the
+  parent's data so far and may change it, so the parent's rules were called
+  impossible where such a validator made them hold.
 
 ## 0.5.0
 
