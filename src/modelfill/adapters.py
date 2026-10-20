@@ -212,6 +212,8 @@ _GENERAL = type(Field(pattern="x").metadata[0])
 # Pydantic markers whose schema hooks only constrain, tag or serialize a value. Being
 # Pydantic's is not enough: ValidateAs, say, runs a function it is given.
 _MARKERS = (PathType, PlainSerializer, Tag, UrlConstraints, UuidVersion, WrapSerializer)
+# The packages whose types' schema hooks only check their own value, such as EmailStr's.
+_PYDANTIC = ("pydantic", "pydantic_core")
 
 
 def _runs_code(item: Any) -> bool:
@@ -222,6 +224,26 @@ def _runs_code(item: Any) -> bool:
     return isinstance(item, (Predicate, Not)) or (
         hasattr(item, "__get_pydantic_core_schema__") and not isinstance(item, _MARKERS)
     )
+
+
+def _foreign_code(annotation: Any, outer: tuple[Any, ...] = ()) -> list[str]:
+    """Code that Pydantic would run for a value of this type beyond the field's own
+    metadata: a schema hook of a type from outside Pydantic, and code in metadata deeper
+    in the type, at any depth. Such code gets the model's data so far, which it may
+    change. A model, whose code gets its own data, ends the search."""
+    annotation, metadata = _resolve(annotation)
+    if any(annotation is seen for seen in outer):  # A recursive type, read once.
+        return []
+    found = [repr(item) for item in _flatten(metadata) if _runs_code(item)] if outer else []
+    if inspect.isclass(annotation):
+        if issubclass(annotation, BaseModel) or dataclasses.is_dataclass(annotation):
+            return found
+        hooks = ("__get_pydantic_core_schema__", "__get_validators__")
+        owner = next((cls for cls in annotation.__mro__ if set(hooks) & vars(cls).keys()), None)
+        if owner is not None and owner.__module__.partition(".")[0] not in _PYDANTIC:
+            found.append(owner.__qualname__)
+    outer += (annotation,)
+    return found + [code for arg in get_args(annotation) for code in _foreign_code(arg, outer)]
 
 
 def _flatten(metadata: Iterable[Any]) -> list[Any]:
@@ -585,6 +607,10 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
                 f"Field {name!r}: unsupported metadata {item!r}"
                 for item in metadata
                 if _runs_code(item)
+            ]
+            unsupported += [
+                f"Field {name!r}: {code} runs its own validation code"
+                for code in _foreign_code(info.annotation)
             ]
         else:
             if domain.kind == "str" and domain.choices is None:

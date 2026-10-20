@@ -24,6 +24,12 @@
   `StringConstraints(to_upper=True)` before modelfill saw it, so a model that
   transforms its value was modeled and could be called impossible; and `ge=0` past a
   callback dropped `ge=1000` before it, so filling proposed values below 1000.
+- An external field whose type runs its own validation code is unsupported logic:
+  a type from outside Pydantic with a `__get_pydantic_core_schema__` or
+  `__get_validators__` hook, or code in metadata within the type, at any depth. Such
+  code gets the model's data so far and may change a solved field between two
+  rules, which were then taken as true of one value and could be called impossible.
+  Models with such fields now fall back, and strict mode refuses them.
 
 ## 0.4.1
 

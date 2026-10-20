@@ -26,6 +26,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic_core import core_schema
 
 from modelfill import (
     GenerationExhausted,
@@ -564,3 +565,52 @@ def test_a_nested_proof_does_not_outlive_unsupported_logic_around_it():
         fill(Emptied)
     with pytest.raises(UnsatisfiableConstraints):  # With no such logic, the proof holds.
         fill(Holder, child={})
+
+
+class Rewriter:  # A type whose own validation sets another field.
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source, handler):
+        def rewrite(value, info):
+            info.data["a"] = 1
+            return value
+
+        return core_schema.with_info_after_validator_function(rewrite, core_schema.int_schema())
+
+
+class Rewritten(BaseModel):
+    a: int
+    b: Rewriter
+
+    @field_validator("a")
+    @classmethod
+    def zero(cls, value):
+        if value != 0:
+            raise ValueError("a starts at 0")
+        return value
+
+    @model_validator(mode="after")
+    def one(self):
+        if self.a != 1:
+            raise ValueError("a ends at 1")
+        return self
+
+
+class RewrittenInside(BaseModel):
+    a: int
+    b: list[Rewriter]
+
+
+class Contact(BaseModel):  # Pydantic's own types check only their own value.
+    email: EmailStr
+    site: HttpUrl
+
+
+def test_a_types_own_validation_code_is_unsupported():
+    # Rewriter's code ran between the two rules, which were taken as true of one value
+    # of a, and so called impossible.
+    with pytest.raises(UnsupportedConstraint, match="Rewriter runs its own validation"):
+        ModelFiller(Rewritten, mode="strict")
+    assert fill(Rewritten, b=0).a == 1
+    with pytest.raises(UnsupportedConstraint, match="Rewriter runs its own validation"):
+        ModelFiller(RewrittenInside, mode="strict")
+    assert ModelFiller(Contact, mode="strict").explain()["unsupported"] == []
