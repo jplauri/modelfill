@@ -13,6 +13,7 @@ from pydantic import (
     Field,
     PrivateAttr,
     StringConstraints,
+    create_model,
     field_validator,
     model_validator,
 )
@@ -194,6 +195,17 @@ def test_duplicate_aliases_rejected():
 
     with pytest.raises(UnsupportedConstraint, match="share the same"):
         introspect(Aliased)
+
+
+def test_a_dot_in_a_field_name_is_rejected():
+    # A field named "child.age" and the nested field child.age were one variable, so
+    # their two bounds were called a contradiction.
+    class Child(BaseModel):
+        age: int = Field(ge=0)
+
+    dotted = create_model("Dotted", child=(Child, ...), **{"child.age": (int, Field(le=-1))})
+    with pytest.raises(UnsupportedConstraint, match="'child.age': a dot in a field name"):
+        introspect(dotted)
 
 
 def test_default_factory_is_not_evaluated_during_discovery():

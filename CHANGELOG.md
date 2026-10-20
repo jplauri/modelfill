@@ -22,6 +22,10 @@
 - A generic type from outside Pydantic that runs its own validation code, such as
   `Box[int]`, is unsupported like the plain class. Hooks were looked for on classes
   only, and the generic alias hid them.
+- A field name with a dot, which only `create_model` can make, is unsupported. It
+  was one solver variable with a nested field's path, so a field named
+  `"child.age"` and the field `age` of `child` had their rules called a
+  contradiction.
 
 ## 0.5.0
 

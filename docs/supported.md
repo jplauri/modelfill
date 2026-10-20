@@ -21,8 +21,8 @@ search that never claims impossibility.
   models and those with defaults are completed on their own, but unsupported logic
   in them, or in models in a collection or a union, counts for a Pydantic parent.
 - These constructor shapes fail explicitly: Pydantic dataclasses, dataclass
-  `InitVar` and `init=False` fields, duplicate aliases, and alias paths through a
-  list that Pydantic cannot replace with the field name.
+  `InitVar` and `init=False` fields, duplicate aliases, field names with a dot, and
+  alias paths through a list that Pydantic cannot replace with the field name.
 
 ## Solved field types
 

@@ -663,6 +663,8 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         a != b and a[: len(b)] == b for a in paths for b in paths
     ):
         raise UnsupportedConstraint("Multiple fields share the same validation alias")
+    if dotted := [field.name for field in fields if "." in field.name]:  # Paths use dots.
+        raise UnsupportedConstraint(f"Field {dotted[0]!r}: a dot in a field name is unsupported")
     constants = {
         name: getattr(model, name) for name in model.__class_vars__ if hasattr(model, name)
     }
