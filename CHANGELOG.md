@@ -34,6 +34,11 @@
   models, such as `type Tree = Leaf | list[Tree]`: its strategy draws itself again
   lazily where the type recurs. A field given a strategy is not inferred at all, so
   passing one no longer runs into the same recursion.
+- `batch()` tells members apart by provider values too, as by solved ones, so a
+  model whose only generated field has a provider, such as a `UUID` id, gives as
+  many records as asked for. Once no solved candidate remains, members reuse
+  earlier members' solved values in turn while provider values still differ. Only
+  solved values counted, so such a model gave one record and then exhausted.
 
 ## 0.4.1
 

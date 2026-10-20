@@ -240,6 +240,26 @@ def test_each_batch_member_gets_its_own_provider_values():
     assert [(order.id.int, order.customer.id.int) for order in orders] == [(0, 1), (2, 3), (4, 5)]
 
 
+class Record(BaseModel):
+    id: UUID
+
+
+class Flagged(BaseModel):
+    id: UUID
+    flag: bool
+
+
+def test_provider_values_tell_batch_members_apart():
+    # Only solved values counted, so a record's one, empty, candidate made one record.
+    ids = iter(range(100))
+    records = ModelFiller(Record, providers={UUID: lambda: UUID(int=next(ids))}).batch(3)
+    assert [record.id.int for record in records] == [0, 1, 2]
+    flagged = ModelFiller(Flagged, providers={UUID: lambda: UUID(int=next(ids))}).batch(3)
+    assert [item.flag for item in flagged] == [False, True, False]  # Then the first again.
+    with pytest.raises(GenerationExhausted, match="found 2 of 3"):  # The same value cannot.
+        ModelFiller(Flagged, providers={UUID: lambda: UUID(int=7)}).batch(3)
+
+
 class Grouped(BaseModel):
     tags: conlist(int, min_length=2)
     ratio: Annotated[float, Interval(ge=5, le=9)]
