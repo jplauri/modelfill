@@ -235,11 +235,12 @@ def _foreign_code(annotation: Any, outer: tuple[Any, ...] = ()) -> list[str]:
     if any(annotation is seen for seen in outer):  # A recursive type, read once.
         return []
     found = [repr(item) for item in _flatten(metadata) if _runs_code(item)] if outer else []
-    if inspect.isclass(annotation):
-        if issubclass(annotation, BaseModel) or dataclasses.is_dataclass(annotation):
+    origin = annotation if inspect.isclass(annotation) else get_origin(annotation)
+    if inspect.isclass(origin):  # A generic alias, such as Box[int], runs its class's hooks.
+        if issubclass(origin, BaseModel) or dataclasses.is_dataclass(origin):
             return found
         hooks = ("__get_pydantic_core_schema__", "__get_validators__")
-        owner = next((cls for cls in annotation.__mro__ if set(hooks) & vars(cls).keys()), None)
+        owner = next((cls for cls in origin.__mro__ if set(hooks) & vars(cls).keys()), None)
         if owner is not None and owner.__module__.partition(".")[0] not in _PYDANTIC:
             found.append(owner.__qualname__)
     outer += (annotation,)

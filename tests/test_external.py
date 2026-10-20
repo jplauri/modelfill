@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 from uuid import UUID, uuid4
 
 import pytest
@@ -620,6 +620,21 @@ class RewrittenInside(BaseModel):
     b: list[Rewriter]
 
 
+class GenericRewriter[T]:  # The same code, behind a type parameter.
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source, handler):
+        def rewrite(value, info):
+            info.data["a"] = 1
+            return value
+
+        schema = handler.generate_schema(get_args(source)[0])
+        return core_schema.with_info_after_validator_function(rewrite, schema)
+
+
+class GenericRewritten(Rewritten):
+    b: GenericRewriter[int]
+
+
 class Contact(BaseModel):  # Pydantic's own types check only their own value.
     email: EmailStr
     site: HttpUrl
@@ -634,3 +649,10 @@ def test_a_types_own_validation_code_is_unsupported():
     with pytest.raises(UnsupportedConstraint, match="Rewriter runs its own validation"):
         ModelFiller(RewrittenInside, mode="strict")
     assert ModelFiller(Contact, mode="strict").explain()["unsupported"] == []
+
+
+def test_a_generic_types_own_validation_code_is_unsupported():
+    # Only a class was searched for hooks, so GenericRewriter[int], an alias, hid them.
+    with pytest.raises(UnsupportedConstraint, match="GenericRewriter runs its own validation"):
+        ModelFiller(GenericRewritten, mode="strict")
+    assert fill(GenericRewritten, b=0).a == 1

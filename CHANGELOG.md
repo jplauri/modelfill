@@ -19,6 +19,9 @@
   Pydantic validates it inside the parent, where its model validators get the
   parent's data so far and may change it, so the parent's rules were called
   impossible where such a validator made them hold.
+- A generic type from outside Pydantic that runs its own validation code, such as
+  `Box[int]`, is unsupported like the plain class. Hooks were looked for on classes
+  only, and the generic alias hid them.
 
 ## 0.5.0
 
