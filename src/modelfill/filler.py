@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from functools import lru_cache, partial
 from typing import Any, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, RootModel, ValidationError
 
 from .adapters import MISSING, Adapter, FieldSpec, _domain, _resolve, introspect
 from .backend import Solver
@@ -326,7 +326,8 @@ class ModelFiller[T]:
         return self._complete(fixed_fields, 1)[0]
 
     def batch(self, count: int, /, **fixed_fields: Any) -> list[T]:
-        """count distinct completions in canonical order, compared on generated fields."""
+        """count distinct completions in canonical order, compared on generated values,
+        solved and provided alike."""
         if type(count) is not int or count < 0:
             raise ValueError("count must be a nonnegative integer")
         return self._complete(fixed_fields, count) if count else []
@@ -383,7 +384,9 @@ class ModelFiller[T]:
         last_error: BaseException | None = None
         omitted = [name for name in self._compiled.unchecked if name not in solved]
         results: list[T] = []
-        seen: set[tuple[Any, ...]] = set()  # The results' generated values.
+        # The results' generated values, solved and fresh, compared by ==: a provider's
+        # may not hash. ponytail: a linear scan, quadratic in a long batch.
+        seen: list[list[Any]] = []
         failures = 0
         stuck = ""  # Why no further candidate could be chosen, if that ended the search.
         guidance = bool(self._compiled.guidance)  # Dropped once it leaves no candidate.
@@ -404,13 +407,19 @@ class ModelFiller[T]:
                 raise UnsatisfiableConstraints(_contradiction(self.model.__name__, given, rules))
             tried: list[dict[str, Any]] = []  # Every candidate so far, in order; all blocked.
             again: list[dict[str, Any]] = []  # Tried ones to try under new external values.
+            members: list[tuple[dict[str, Any], dict[str, Any]]] = []  # Candidates and inputs.
             while len(results) < count and failures < self.max_attempts:
                 cost = 0 if again else 1  # A retry costs no attempt: there are only so many.
+                reused = False
                 if again:
                     candidate = again.pop(0)
-                else:
-                    if (results or failures) and not solver.check():
+                elif (results or failures) and not solver.check():
+                    # No candidate is left, but fresh values, a provider's say, may still
+                    # tell a member apart: earlier members' candidates in turn, with them.
+                    if not members or inputs == members[-1][1]:
                         break  # Every remaining candidate has been tried.
+                    candidate, reused = members[len(results) % len(members)][0], True
+                else:
                     # Alternate, so guidance misled by an unknown hook cannot starve the
                     # search, and go without it when it leaves no candidate at all.
                     for guided in (True, False) if guidance and failures % 2 == 0 else (False,):
@@ -435,13 +444,18 @@ class ModelFiller[T]:
                     # Even an error at a value chosen for another field may depend on the
                     # solved fields, through info.data, so the search goes on.
                     failures, last_error = failures + cost, exc.__cause__ or exc
+                    if reused:  # The next one tries new fresh values.
+                        inputs = inputs | {path: make() for path, make in fresh.items()}
                     continue
                 # Unsupported logic can turn different candidates into equal objects.
-                generated = tuple(_get(instance, name) for name in candidate)
+                generated = [_get(instance, path) for path in (*candidate, *fresh)]
                 if generated in seen:
                     failures += cost
+                    if reused:
+                        inputs = inputs | {path: make() for path, make in fresh.items()}
                     continue
-                seen.add(generated)
+                seen.append(generated)
+                members.append((candidate, inputs))
                 results.append(instance)
                 if rng is None and count == 1 and not failures:
                     if len(cache) >= 256:  # Bounded: forget the oldest assignment.
@@ -513,7 +527,18 @@ class ModelFiller[T]:
         return self.providers.get(options[0]) if len(options) == 1 else None
 
     def _assemble(self, values: dict[str, Any]) -> Any:
-        """Build each solved nested model from its fields' values, then this model."""
+        """Build this model from its fields' values, a solved nested model's by path."""
+        adapter = self._compiled.adapter
+        try:
+            return adapter.construct(self._own(values))
+        except adapter.rejections as exc:
+            raise _Rejected from exc
+
+    def _own(self, values: dict[str, Any]) -> dict[str, Any]:
+        """This model's field values, with each solved nested model's made from its paths.
+        A Pydantic model gets a nested Pydantic model as its input, which it validates in
+        place, as a given dict, so a validator there sees which field it is in; a
+        dataclass, which validates nothing, gets it built."""
         local = {name: value for name, value in values.items() if "." not in name}
         for name, model in self._compiled.nested:
             if name not in local:  # A given nested instance is used as it is.
@@ -523,12 +548,14 @@ class ModelFiller[T]:
                     for key, value in values.items()
                     if key.startswith(prefix)
                 }
-                local[name] = self._nested_filler(name, model)._assemble(inner)
-        adapter = self._compiled.adapter
-        try:
-            return adapter.construct(local)
-        except adapter.rejections as exc:
-            raise _Rejected from exc
+                nested = self._nested_filler(name, model)
+                if all(issubclass(kind, BaseModel) for kind in (self.model, model)) and not (
+                    issubclass(model, RootModel)  # Its input would be the root value.
+                ):
+                    local[name] = nested._compiled.adapter.inputs(nested._own(inner))
+                else:
+                    local[name] = nested._assemble(inner)
+        return local
 
     def _nested_inputs(
         self, name: str, model: type, given: Any
@@ -593,7 +620,26 @@ class ModelFiller[T]:
         try:
             return self._nested_filler(name, model).fill(**fixed)
         except ModelFillError as error:
-            raise type(error)(f"{name}: {error}") from error
+            raise self._nested_error(name, error) from error
+
+    def _nested_error(self, name: str, error: ModelFillError) -> ModelFillError:
+        """A nested model's error, under its field's name. Unsupported logic in this model
+        may change or bypass the nested value, so no proof of impossibility carries over."""
+        kind = type(error)
+        if kind is UnsatisfiableConstraints and self._compiled.unsupported:
+            kind = GenerationExhausted
+        return kind(f"{name}: {error}")
+
+    def _completed(self, name: str, annotation: Any, given: Any) -> Any:
+        """A given value with each dict in it that stands for a model completed. When one
+        cannot be, unsupported logic in this model, which may change or bypass it, gets
+        the value as given, for the constructor to decide."""
+        try:
+            return complete(annotation, given, partial(self._fill_nested, name))
+        except (ModelFillError, TypeError, ValueError):
+            if not self._compiled.unsupported:
+                raise
+            return given
 
     def _inputs(
         self, fixed_fields: dict[str, Any]
@@ -623,7 +669,7 @@ class ModelFiller[T]:
                     given = provider() if provider is not None else given
                     known, made = self._nested_inputs(name, solved_nested[name], given)
                 except ModelFillError as error:
-                    raise type(error)(f"{name}: {error}") from error
+                    raise self._nested_error(name, error) from error
                 inputs.update(known)
                 fresh.update(made)
                 continue
@@ -631,8 +677,7 @@ class ModelFiller[T]:
             if given is not MISSING:
                 # A dict that stands for a model, at any depth, is completed.
                 if isinstance(given, (dict, list, tuple)) and models_in(field.annotation):
-                    fill = partial(self._fill_nested, name)
-                    fresh[name] = partial(complete, field.annotation, given, fill)
+                    fresh[name] = partial(self._completed, name, field.annotation, given)
                     inputs[name] = fresh[name]()
                 else:
                     inputs[name] = given

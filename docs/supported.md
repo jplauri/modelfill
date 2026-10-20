@@ -211,4 +211,9 @@ these Pydantic features:
 - default factories that read other fields.
 
 A validator that reads an external field is unsupported too, and so is other code
-in an external field's metadata, an `AfterValidator` or `ValidateAs` among them.
+in an external field's metadata, an `AfterValidator` or `ValidateAs` among them,
+and any code its type runs: a type with its own `__get_pydantic_core_schema__` or
+`__get_validators__` from outside Pydantic, or code in metadata within the type, as
+in `list[Annotated[int, AfterValidator(f)]]`, at any depth but inside a nested model.
+Such code gets the model's data so far and may change it. Pydantic's own types,
+such as `EmailStr` and `HttpUrl`, check only their value.

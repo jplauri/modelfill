@@ -94,6 +94,22 @@ def test_rules_that_read_a_patterned_field_stay_exact():
         fill(Lowercase)
 
 
+class Shout(BaseModel):
+    word: str = Field(pattern=r"(?i)^a{3}$")
+
+    @model_validator(mode="after")
+    def check(self):
+        if not self.word.startswith("A"):
+            raise ValueError("a shout starts with A")
+        return self
+
+
+def test_case_insensitive_patterns_spell_either_case():
+    # Under (?i), only negated sets matched the other case, so only aaa was spelled.
+    assert ModelFiller(Shout, mode="strict").fill().word == "Aaa"
+    assert {"aaa", "aaA", "Aaa", "AAA"} <= set(Pattern(r"(?i)^a{3}$", None).spell("x", bool, 3))
+
+
 class Customer(BaseModel):
     country: str = Field(pattern=r"^[A-Z]{2}$")
     nickname: str | None = Field(pattern=r"^[a-z]+$")

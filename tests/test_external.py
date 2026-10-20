@@ -26,6 +26,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic_core import core_schema
 
 from modelfill import (
     GenerationExhausted,
@@ -237,6 +238,26 @@ def test_each_batch_member_gets_its_own_provider_values():
     ids = iter(range(100))
     orders = ModelFiller(Order, providers={UUID: lambda: UUID(int=next(ids))}).batch(3)
     assert [(order.id.int, order.customer.id.int) for order in orders] == [(0, 1), (2, 3), (4, 5)]
+
+
+class Record(BaseModel):
+    id: UUID
+
+
+class Flagged(BaseModel):
+    id: UUID
+    flag: bool
+
+
+def test_provider_values_tell_batch_members_apart():
+    # Only solved values counted, so a record's one, empty, candidate made one record.
+    ids = iter(range(100))
+    records = ModelFiller(Record, providers={UUID: lambda: UUID(int=next(ids))}).batch(3)
+    assert [record.id.int for record in records] == [0, 1, 2]
+    flagged = ModelFiller(Flagged, providers={UUID: lambda: UUID(int=next(ids))}).batch(3)
+    assert [item.flag for item in flagged] == [False, True, False]  # Then the first again.
+    with pytest.raises(GenerationExhausted, match="found 2 of 3"):  # The same value cannot.
+        ModelFiller(Flagged, providers={UUID: lambda: UUID(int=7)}).batch(3)
 
 
 class Grouped(BaseModel):
@@ -528,3 +549,88 @@ class Node(BaseModel):
 def test_a_model_that_contains_itself_needs_a_value():
     with pytest.raises(UnsupportedConstraint, match="contains itself"):
         fill(Node)
+
+
+class Impossible(BaseModel):
+    x: int = Field(ge=1, le=0)
+
+
+class Holder(BaseModel):
+    child: Impossible | None
+
+
+class Cleared(BaseModel):  # Its validator replaces any child, so it needs none.
+    child: Impossible | None
+
+    @field_validator("child", mode="before")
+    @classmethod
+    def clear(cls, child):
+        return None
+
+
+class Emptied(BaseModel):
+    children: list[Impossible] = Field(min_length=1)
+
+    @field_validator("children", mode="plain")
+    @classmethod
+    def empty(cls, children):
+        return []
+
+
+def test_a_nested_proof_does_not_outlive_unsupported_logic_around_it():
+    # The child's impossibility was raised as the parent's own, though the parent's
+    # validator replaces the child: Cleared takes the given dict, Emptied any list.
+    assert fill(Cleared, child={}).child is None
+    with pytest.raises(GenerationExhausted, match="children: Impossible"):
+        fill(Emptied)
+    with pytest.raises(UnsatisfiableConstraints):  # With no such logic, the proof holds.
+        fill(Holder, child={})
+
+
+class Rewriter:  # A type whose own validation sets another field.
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source, handler):
+        def rewrite(value, info):
+            info.data["a"] = 1
+            return value
+
+        return core_schema.with_info_after_validator_function(rewrite, core_schema.int_schema())
+
+
+class Rewritten(BaseModel):
+    a: int
+    b: Rewriter
+
+    @field_validator("a")
+    @classmethod
+    def zero(cls, value):
+        if value != 0:
+            raise ValueError("a starts at 0")
+        return value
+
+    @model_validator(mode="after")
+    def one(self):
+        if self.a != 1:
+            raise ValueError("a ends at 1")
+        return self
+
+
+class RewrittenInside(BaseModel):
+    a: int
+    b: list[Rewriter]
+
+
+class Contact(BaseModel):  # Pydantic's own types check only their own value.
+    email: EmailStr
+    site: HttpUrl
+
+
+def test_a_types_own_validation_code_is_unsupported():
+    # Rewriter's code ran between the two rules, which were taken as true of one value
+    # of a, and so called impossible.
+    with pytest.raises(UnsupportedConstraint, match="Rewriter runs its own validation"):
+        ModelFiller(Rewritten, mode="strict")
+    assert fill(Rewritten, b=0).a == 1
+    with pytest.raises(UnsupportedConstraint, match="Rewriter runs its own validation"):
+        ModelFiller(RewrittenInside, mode="strict")
+    assert ModelFiller(Contact, mode="strict").explain()["unsupported"] == []

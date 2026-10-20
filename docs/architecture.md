@@ -199,7 +199,10 @@ hook there could change values the parent's rules read, so every predicate is
 demoted to guidance, as for unsupported logic in the parent itself. Optional
 nested models and those with defaults are completed on their own, and a rule
 that reads one is unsupported. A model that contains itself is never solved this
-way, so filling it reports the problem.
+way, so filling it reports the problem. The reverse holds too: unsupported logic
+in the parent may change or bypass a nested value, so a nested model completed on
+its own proves nothing impossible about the parent, and a given value that cannot
+be completed goes to the parent's constructor as it is.
 
 Models inside a list, tuple or dict, or in a union, are completed on their own
 too. The boring-value walk takes a callback that fills a model wherever the walk
@@ -267,7 +270,10 @@ each completion in turn, enumerating distinct completions in canonical order.
 Exclusions outlive a member's provider values only while the model is fully
 modeled, since then external values cannot change which candidates validate or
 what they become. Under unsupported logic, a member whose values differ first tries
-again, in order and without spending attempts, the candidates tried before.
+again, in order and without spending attempts, the candidates tried before. Members
+are distinct by every value modelfill generated, a provider's too, so once the
+solver has no candidate left, earlier members' candidates serve again, in turn and
+each spending an attempt, while fresh values still differ from the last member's.
 Reusing a `ModelFiller` avoids repeated analysis. Each thread receives its own
 solver and private Z3 context; only compiled immutable information is shared.
 Compilation and the top-level convenience filler use bounded LRU caches keyed by
@@ -372,7 +378,10 @@ of the time, and strings are random lowercase text. Each example builds a fresh
 solver seeded from a Hypothesis draw, because an incremental solver's answers
 depend on its history; a fresh one makes every example a pure function of the
 draws, so failures replay and drawn fields shrink; the solved fields replay but
-do not shrink. A proven contradiction becomes `reject()`. Hypothesis counts that
+do not shrink. Every check, the optimizer's that finds exploration's ranges
+included, is bounded by the work limit, which decides the same way on any
+machine; only where the wall-clock safety net fires first can a replay differ.
+A proven contradiction becomes `reject()`. Hypothesis counts that
 as filtering, so drawn fields that are mostly impossible still trip its health
 check. The benefit is narrower: Hypothesis draws only the fields a test chooses,
 and modelfill solves the dependent ones, so complete objects never have to be

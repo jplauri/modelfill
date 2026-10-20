@@ -463,7 +463,9 @@ class Solver:
         if not names:
             return {}
         optimizer = z3.Optimize(ctx=self.context)
-        optimizer.set(priority="box", timeout=self.timeout_ms)
+        # The work limit decides, as for every check, so a seed replays the same ranges
+        # on any machine; the wall clock is only a safety net.
+        optimizer.set(priority="box", rlimit=self.work_limit, timeout=self.timeout_ms)
         optimizer.add(*self.engine.assertions(), *assumptions)
         objectives = {
             name: (

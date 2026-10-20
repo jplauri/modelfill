@@ -18,6 +18,7 @@ from pydantic import (
     ConfigDict,
     Field,
     RootModel,
+    StringConstraints,
     ValidationError,
     ValidationInfo,
     create_model,
@@ -564,6 +565,25 @@ def test_rules_may_test_how_strings_start_and_end():
         fill(Catalog, filename="data.json")
 
 
+class Prefixed(BaseModel):
+    value: str
+    prefix: str | None
+
+    @model_validator(mode="after")
+    def check(self):
+        if not self.value.startswith(("x", self.prefix)):
+            raise ValueError("value needs the prefix")
+        return self
+
+
+def test_a_none_past_a_matching_affix_is_never_read():
+    # Python stops at the first entry that matches, but every entry had to be a string:
+    # prefix=None was called impossible, and the canonical prefix was "prefix".
+    filler = ModelFiller(Prefixed, mode="strict")
+    assert filler.fill(value="x", prefix=None).prefix is None
+    assert filler.fill(value="x").prefix is None
+
+
 class Labels(BaseModel):
     sku: str
     filename: str
@@ -800,6 +820,37 @@ def test_info_field_name_is_read():
     assert ModelFiller(Named, mode="strict").fill() == Named(small=0, large=10)
 
 
+class Amount(BaseModel):
+    value: int
+
+    @model_validator(mode="after")
+    def check(self, info):
+        if info.field_name == "refund":
+            if self.value > 0:
+                raise ValueError("a refund is not positive")
+        elif self.value < 0:
+            raise ValueError("an amount is not negative")
+        return self
+
+
+class Receipt(BaseModel):
+    refund: Amount
+
+
+def test_a_model_validators_field_name_is_unsupported():
+    # Pydantic passes it the field the model is nested in, "refund" here, but it was
+    # read as None, so a refund of -1 was called impossible. Pydantic 2.10 passed None.
+    with pytest.raises(UnsupportedConstraint, match="info.field_name depends on its parent"):
+        ModelFiller(Receipt, mode="strict")
+    try:
+        expected = Receipt(refund={"value": -1})
+    except ValidationError:
+        with pytest.raises(GenerationExhausted):
+            fill(Receipt, refund={"value": -1})
+    else:
+        assert fill(Receipt, refund={"value": -1}) == expected
+
+
 def test_field_validator_earlier_field_reads():
     filler = ModelFiller(FieldDependency, mode="strict")
     assert filler.fill(lower=19).upper == 20
@@ -859,6 +910,41 @@ def test_pure_annotated_after_validators_are_modeled_like_field_validators():
     assert ModelFiller(AboveMinimum, mode="strict").fill(minimum=5).value == 6
     with pytest.raises(UnsupportedConstraint, match="return must preserve"):  # It transforms.
         ModelFiller(Doubled, mode="strict")
+
+
+def lower_a(value: str) -> str:
+    if value != "a":
+        raise ValueError("the value is a")
+    return value
+
+
+class Uppercased(BaseModel):  # Pydantic takes "a", then turns it into "A".
+    x: Annotated[
+        str, AfterValidator(lower_a), StringConstraints(to_upper=True), Field(pattern="^[A-Z]$")
+    ]
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.x != "A":
+            raise ValueError("the value is A")
+        return self
+
+
+def unchanged(value: int) -> int:
+    return value
+
+
+class Staged(BaseModel):  # Pydantic checks ge=1000, then the callback, then ge=0.
+    x: Annotated[int, Field(ge=1000), AfterValidator(unchanged), Field(ge=0)]
+
+
+def test_metadata_holds_setting_by_setting_and_stage_by_stage():
+    # A later pattern dropped the earlier to_upper before anything checked it, so this
+    # was modeled, and called impossible; and ge=0 past the callback dropped ge=1000.
+    with pytest.raises(UnsupportedConstraint, match="to_upper"):
+        ModelFiller(Uppercased, mode="strict")
+    assert fill(Uppercased).x == "A"  # Its pattern checks the value to_upper returns.
+    assert ModelFiller(Staged, mode="strict").fill().x == 1000
 
 
 def test_shared_filler_thread_safety():

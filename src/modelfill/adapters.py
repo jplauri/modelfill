@@ -137,8 +137,8 @@ class Adapter:
     unsupported: tuple[str, ...]
     constants: dict[str, Any] = dataclasses.field(default_factory=dict)  # Its ClassVars.
 
-    def construct(self, values: dict[str, Any]) -> Any:
-        """Run the model's real constructor, including its original validators."""
+    def inputs(self, values: dict[str, Any]) -> dict[str, Any]:
+        """The constructor's keyword arguments for these field values, by input path."""
         inputs: dict[str, Any] = {}
         for field in self.fields:
             if field.name in values:
@@ -147,7 +147,11 @@ class Adapter:
                 for key in outer:  # An AliasPath reads the value from nested dicts.
                     target = target.setdefault(key, {})
                 target[last] = values[field.name]
-        return self.model(**inputs)
+        return inputs
+
+    def construct(self, values: dict[str, Any]) -> Any:
+        """Run the model's real constructor, including its original validators."""
+        return self.model(**self.inputs(values))
 
     @property
     def rejections(self) -> tuple[type[Exception], ...]:
@@ -198,6 +202,9 @@ def _domain(annotation: Any, grid: Domain | None = None) -> Domain | None:
 
 
 _SYMBOLS = {Gt: ">", Ge: ">=", Lt: "<", Le: "<="}
+# Pydantic's general metadata settings modelfill reads, by kind; any other is code,
+# such as to_upper, or a setting the solver does not model.
+_SETTINGS = {"decimal": {"max_digits", "decimal_places"}, "str": {"pattern"}}
 # Pydantic's class for constraints that annotated-types lacks, such as a pattern.
 _GENERAL = type(Field(pattern="x").metadata[0])
 
@@ -205,6 +212,8 @@ _GENERAL = type(Field(pattern="x").metadata[0])
 # Pydantic markers whose schema hooks only constrain, tag or serialize a value. Being
 # Pydantic's is not enough: ValidateAs, say, runs a function it is given.
 _MARKERS = (PathType, PlainSerializer, Tag, UrlConstraints, UuidVersion, WrapSerializer)
+# The packages whose types' schema hooks only check their own value, such as EmailStr's.
+_PYDANTIC = ("pydantic", "pydantic_core")
 
 
 def _runs_code(item: Any) -> bool:
@@ -215,6 +224,26 @@ def _runs_code(item: Any) -> bool:
     return isinstance(item, (Predicate, Not)) or (
         hasattr(item, "__get_pydantic_core_schema__") and not isinstance(item, _MARKERS)
     )
+
+
+def _foreign_code(annotation: Any, outer: tuple[Any, ...] = ()) -> list[str]:
+    """Code that Pydantic would run for a value of this type beyond the field's own
+    metadata: a schema hook of a type from outside Pydantic, and code in metadata deeper
+    in the type, at any depth. Such code gets the model's data so far, which it may
+    change. A model, whose code gets its own data, ends the search."""
+    annotation, metadata = _resolve(annotation)
+    if any(annotation is seen for seen in outer):  # A recursive type, read once.
+        return []
+    found = [repr(item) for item in _flatten(metadata) if _runs_code(item)] if outer else []
+    if inspect.isclass(annotation):
+        if issubclass(annotation, BaseModel) or dataclasses.is_dataclass(annotation):
+            return found
+        hooks = ("__get_pydantic_core_schema__", "__get_validators__")
+        owner = next((cls for cls in annotation.__mro__ if set(hooks) & vars(cls).keys()), None)
+        if owner is not None and owner.__module__.partition(".")[0] not in _PYDANTIC:
+            found.append(owner.__qualname__)
+    outer += (annotation,)
+    return found + [code for arg in get_args(annotation) for code in _foreign_code(arg, outer)]
 
 
 def _flatten(metadata: Iterable[Any]) -> list[Any]:
@@ -270,16 +299,29 @@ def _input_path(name: str, alias: Any, by_alias: bool, by_name: bool) -> tuple[s
     raise UnsupportedConstraint(f"Field {name!r}: an alias path through a list is unsupported")
 
 
-def _settings(item: Any) -> set[str]:
-    """The options set in Pydantic's general metadata."""
-    return {key for key, value in vars(item).items() if value is not None and value is not False}
-
-
-def _pattern(item: Any) -> Any:
-    """The pattern in Pydantic's general metadata, if nothing else there applies."""
-    if type(item) is not _GENERAL:
-        return None
-    return item.pattern if _settings(item) == {"pattern"} else None
+def _applied(metadata: Iterable[Any]) -> tuple[list[Any], list[dict[str, Any]]]:
+    """The metadata items that hold, AfterValidators aside, and the general settings
+    that do, as Pydantic applies them. Before any callback, it sets them on the schema
+    itself: the last item of each kind holds, and of its general metadata, such as a
+    pattern or to_upper, the last of each setting. Past a callback, it checks each item
+    on its own on the callback's result, so every one holds."""
+    items: list[Any] = []
+    generals: list[dict[str, Any]] = [{}]
+    first = True  # No callback yet.
+    for item in metadata:
+        if isinstance(item, AfterValidator):
+            first = False
+        elif type(item) is _GENERAL:
+            settings = {key: value for key, value in vars(item).items() if value is not None}
+            if first:
+                generals[0] |= settings
+            else:
+                generals.append(settings)
+        else:
+            if first:
+                items = [other for other in items if type(other) is not type(item)]
+            items.append(item)
+    return items, generals
 
 
 def _grid(metadata: list[Any]) -> Domain | None:
@@ -314,13 +356,37 @@ def _metadata_constraints(
     name: str, domain: Domain, metadata: list[Any], unsupported: list[str]
 ) -> tuple[list[tuple[str, Expr]], Any]:
     """A field's own constraints, as (label, rule) pairs, and its pattern, or None,
-    from its flattened metadata."""
-    result: list[tuple[str, Expr]] = []
+    from its flattened metadata, AfterValidators included."""
     pattern = None
     expression = var(name, domain)
     # Pydantic keeps the last constraint of each kind, with Field() before Annotated[...]:
     # Field(ge=10) on an Annotated[int, Ge(0)] alias leaves ge=0 in force.
-    for item in {type(item): item for item in metadata}.values():
+    items, generals = _applied(metadata)
+    allowed = _SETTINGS.get(domain.kind, set())  # The domain or the pattern holds these.
+    settings = {key for general in generals for key, value in general.items() if value is not False}
+    if not settings <= allowed:  # Code, such as to_upper, whose result a pattern may check.
+        unmodeled = ", ".join(sorted(settings - allowed))
+        unsupported.append(f"Field {name!r}: unsupported metadata {unmodeled}")
+    elif patterns := [general["pattern"] for general in generals if "pattern" in general]:
+        pattern = patterns[-1]  # Only checked: it never transforms a value.
+    result = _rules(name, domain, expression, items, unsupported)
+    if domain.digits is not None:  # Pydantic counts digits: |units| < 10**max_digits.
+        low, high = (
+            const(decode("decimal", sign * 10**domain.digits, domain.scale)) for sign in (-1, 1)
+        )
+        within = node("and", node("lt", low, expression), node("lt", expression, high))
+        result.append((f"{name} has at most {domain.digits} digits", within))
+    if domain.nullable:  # Pydantic applies these constraints to non-None values only.
+        result = [(label, node("or", node("isnone", expression), rule)) for label, rule in result]
+    return result, pattern
+
+
+def _rules(
+    name: str, domain: Domain, expression: Expr, items: Iterable[Any], unsupported: list[str]
+) -> list[tuple[str, Expr]]:
+    """The rules of one stage's metadata items, apart from Pydantic's general metadata."""
+    result: list[tuple[str, Expr]] = []
+    for item in items:
         if isinstance(item, Strict):
             continue  # All generated/fixed inputs already have their canonical type.
         if isinstance(item, (Gt, Ge, Lt, Le)) and domain.kind in TIME_TYPES:
@@ -382,9 +448,6 @@ def _metadata_constraints(
                 node("eq", remainder, const(Decimal(0))),
             )
             result.append((f"{name} % {item.multiple_of} == 0", rule))
-        elif domain.kind == "decimal" and type(item) is _GENERAL:  # The domain holds these.
-            if not _settings(item) <= {"max_digits", "decimal_places"}:
-                unsupported.append(f"Field {name!r}: unsupported metadata {item!r}")
         elif isinstance(item, (MinLen, MaxLen)) and domain.kind == "str":
             minimum = isinstance(item, MinLen)
             value = item.min_length if minimum else item.max_length
@@ -394,19 +457,9 @@ def _metadata_constraints(
             symbol, operation = (">=", "ge") if minimum else ("<=", "le")
             length = node("len", expression, sort=INT)
             result.append((f"len({name}) {symbol} {value}", node(operation, length, const(value))))
-        elif domain.kind == "str" and (found := _pattern(item)) is not None:
-            pattern = found  # Only checked: it never transforms a value.
         else:
             unsupported.append(f"Field {name!r}: unsupported metadata {item!r}")
-    if domain.digits is not None:  # Pydantic counts digits: |units| < 10**max_digits.
-        low, high = (
-            const(decode("decimal", sign * 10**domain.digits, domain.scale)) for sign in (-1, 1)
-        )
-        within = node("and", node("lt", low, expression), node("lt", expression, high))
-        result.append((f"{name} has at most {domain.digits} digits", within))
-    if domain.nullable:  # Pydantic applies these constraints to non-None values only.
-        result = [(label, node("or", node("isnone", expression), rule)) for label, rule in result]
-    return result, pattern
+    return result
 
 
 def _pydantic_validators(
@@ -534,12 +587,12 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
         pattern = None
         # Unpacked before anything reads it, so a group's own length limits override
         # the global ones, as in Pydantic.
-        metadata = _flatten([*inherited, *info.metadata])
+        staged = _flatten([*inherited, *info.metadata])
         # An AfterValidator gets the field's validated value, as a field validator does,
         # so it is analyzed as one: a pure check is modeled, anything else unsupported.
         # Unlike a constraint of one kind, every one of them runs.
-        checks = [item.func for item in metadata if isinstance(item, AfterValidator)]
-        metadata = [item for item in metadata if not isinstance(item, AfterValidator)]
+        checks = [item.func for item in staged if isinstance(item, AfterValidator)]
+        metadata = [item for item in staged if not isinstance(item, AfterValidator)]
         domain = _domain(annotation, _grid(metadata))
         validators += [
             ValidatorSpec(
@@ -563,15 +616,19 @@ def _pydantic(model: type[BaseModel]) -> Adapter:
                 for item in metadata
                 if _runs_code(item)
             ]
+            unsupported += [
+                f"Field {name!r}: {code} runs its own validation code"
+                for code in _foreign_code(info.annotation)
+            ]
         else:
             if domain.kind == "str" and domain.choices is None:
                 # A field's own length limit overrides the global configuration.
                 shortest, longest = config.get("str_min_length"), config.get("str_max_length")
                 if shortest is not None and not any(isinstance(m, MinLen) for m in metadata):
-                    metadata.append(MinLen(shortest))
+                    staged.append(MinLen(shortest))
                 if longest is not None and not any(isinstance(m, MaxLen) for m in metadata):
-                    metadata.append(MaxLen(longest))
-            rules, regex = _metadata_constraints(name, domain, metadata, unsupported)
+                    staged.append(MaxLen(longest))
+            rules, regex = _metadata_constraints(name, domain, staged, unsupported)
             constraints.extend(rules)
             if regex is not None:
                 pattern = Pattern(regex, config.get("regex_engine"))

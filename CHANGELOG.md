@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A nested model's impossibility no longer counts as its parent's when the parent
+  has unsupported logic, which may change or bypass the nested value: filling then
+  raises `GenerationExhausted`, and a given dict that cannot be completed goes to
+  the parent's constructor as it is. A parent whose `before` validator replaces an
+  impossible child was itself called impossible.
+- A model validator that reads `info.field_name` is unsupported: Pydantic passes it
+  the field its model is nested in, as `"refund"`, but modelfill read `None`, and
+  could call a valid nested value impossible. A solved nested Pydantic model is now
+  validated in its place in the parent, as a given dict is, rather than built alone
+  first, so such a validator sees the field it is in.
+- `startswith()` and `endswith()` with a tuple require an entry to be a string only
+  when no entry before it matched, as Python stops at the first match. Every entry
+  had to be, so `value.startswith(("x", self.prefix))` called `prefix=None` with
+  `value="x"` impossible, and the canonical prefix was `"prefix"` instead of `None`.
+- A field's metadata is read as Pydantic applies it: before any `AfterValidator`,
+  the last item of each kind, and of the general settings such as `pattern` and
+  `to_upper` the last of each; past one, every item, each checked on its own. A
+  later `Field(pattern=...)` dropped an earlier `StringConstraints(to_upper=True)`
+  before modelfill saw it, so a model that transforms its value was modeled and
+  could be called impossible; and `ge=0` past a callback dropped `ge=1000` before
+  it, so filling proposed values below 1000.
+- An external field whose type runs its own validation code is unsupported logic:
+  a type from outside Pydantic with a `__get_pydantic_core_schema__` or
+  `__get_validators__` hook, or code in metadata within the type, at any depth. Such
+  code gets the model's data so far and may change a solved field between two
+  rules, which were then taken as true of one value and could be called impossible.
+  Models with such fields now fall back, and strict mode refuses them.
+- `from_model` no longer recurses forever on a recursive type alias that holds
+  models, such as `type Tree = Leaf | list[Tree]`: its strategy draws itself again
+  lazily where the type recurs. A field given a strategy is not inferred at all, so
+  passing one no longer runs into the same recursion.
+- `batch()` tells members apart by provider values too, as by solved ones, so a
+  model whose only generated field has a provider, such as a `UUID` id, gives as
+  many records as asked for. Once no solved candidate remains, members reuse
+  earlier members' solved values in turn while provider values still differ. Only
+  solved values counted, so such a model gave one record and then exhausted.
+- A case-insensitive pattern spells values in either case: under `(?i)`, a literal
+  or a character set matches the other case of what it names too. Only negated
+  sets did, so `(?i)^a{3}$` spelled `aaa` alone, and a rule that the value start
+  with `A` exhausted the search.
+- The optimizer that finds the ranges `from_model` explores is bounded by the work
+  limit, as every other check is, not by the wall-clock timeout alone, so whether
+  it finds them no longer depends on the machine's speed, and a seed replays the
+  same values.
+
 ## 0.4.1
 
 Fixes from two outside reviews. Impossibility claims hold where they did not:
