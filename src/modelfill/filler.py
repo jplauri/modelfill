@@ -593,7 +593,26 @@ class ModelFiller[T]:
         try:
             return self._nested_filler(name, model).fill(**fixed)
         except ModelFillError as error:
-            raise type(error)(f"{name}: {error}") from error
+            raise self._nested_error(name, error) from error
+
+    def _nested_error(self, name: str, error: ModelFillError) -> ModelFillError:
+        """A nested model's error, under its field's name. Unsupported logic in this model
+        may change or bypass the nested value, so no proof of impossibility carries over."""
+        kind = type(error)
+        if kind is UnsatisfiableConstraints and self._compiled.unsupported:
+            kind = GenerationExhausted
+        return kind(f"{name}: {error}")
+
+    def _completed(self, name: str, annotation: Any, given: Any) -> Any:
+        """A given value with each dict in it that stands for a model completed. When one
+        cannot be, unsupported logic in this model, which may change or bypass it, gets
+        the value as given, for the constructor to decide."""
+        try:
+            return complete(annotation, given, partial(self._fill_nested, name))
+        except (ModelFillError, TypeError, ValueError):
+            if not self._compiled.unsupported:
+                raise
+            return given
 
     def _inputs(
         self, fixed_fields: dict[str, Any]
@@ -623,7 +642,7 @@ class ModelFiller[T]:
                     given = provider() if provider is not None else given
                     known, made = self._nested_inputs(name, solved_nested[name], given)
                 except ModelFillError as error:
-                    raise type(error)(f"{name}: {error}") from error
+                    raise self._nested_error(name, error) from error
                 inputs.update(known)
                 fresh.update(made)
                 continue
@@ -631,8 +650,7 @@ class ModelFiller[T]:
             if given is not MISSING:
                 # A dict that stands for a model, at any depth, is completed.
                 if isinstance(given, (dict, list, tuple)) and models_in(field.annotation):
-                    fill = partial(self._fill_nested, name)
-                    fresh[name] = partial(complete, field.annotation, given, fill)
+                    fresh[name] = partial(self._completed, name, field.annotation, given)
                     inputs[name] = fresh[name]()
                 else:
                     inputs[name] = given

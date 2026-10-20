@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A nested model's impossibility no longer counts as its parent's when the parent
+  has unsupported logic, which may change or bypass the nested value: filling then
+  raises `GenerationExhausted`, and a given dict that cannot be completed goes to
+  the parent's constructor as it is. A parent whose `before` validator replaces an
+  impossible child was itself called impossible.
+
 ## 0.4.1
 
 Fixes from two outside reviews. Impossibility claims hold where they did not:

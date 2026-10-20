@@ -528,3 +528,39 @@ class Node(BaseModel):
 def test_a_model_that_contains_itself_needs_a_value():
     with pytest.raises(UnsupportedConstraint, match="contains itself"):
         fill(Node)
+
+
+class Impossible(BaseModel):
+    x: int = Field(ge=1, le=0)
+
+
+class Holder(BaseModel):
+    child: Impossible | None
+
+
+class Cleared(BaseModel):  # Its validator replaces any child, so it needs none.
+    child: Impossible | None
+
+    @field_validator("child", mode="before")
+    @classmethod
+    def clear(cls, child):
+        return None
+
+
+class Emptied(BaseModel):
+    children: list[Impossible] = Field(min_length=1)
+
+    @field_validator("children", mode="plain")
+    @classmethod
+    def empty(cls, children):
+        return []
+
+
+def test_a_nested_proof_does_not_outlive_unsupported_logic_around_it():
+    # The child's impossibility was raised as the parent's own, though the parent's
+    # validator replaces the child: Cleared takes the given dict, Emptied any list.
+    assert fill(Cleared, child={}).child is None
+    with pytest.raises(GenerationExhausted, match="children: Impossible"):
+        fill(Emptied)
+    with pytest.raises(UnsatisfiableConstraints):  # With no such logic, the proof holds.
+        fill(Holder, child={})
