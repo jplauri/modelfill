@@ -299,21 +299,29 @@ def _input_path(name: str, alias: Any, by_alias: bool, by_name: bool) -> tuple[s
     raise UnsupportedConstraint(f"Field {name!r}: an alias path through a list is unsupported")
 
 
-def _stages(metadata: Iterable[Any]) -> list[tuple[dict[type, Any], dict[str, Any]]]:
-    """Metadata as Pydantic applies it, in the stages its AfterValidators split it into:
-    in each, the last item of each kind holds, and of Pydantic's general metadata, such
-    as a pattern or to_upper, the last of each setting. A stage past a callback checks
-    the callback's result, so the constraints of every stage hold."""
-    stages: list[tuple[dict[type, Any], dict[str, Any]]] = [({}, {})]
+def _applied(metadata: Iterable[Any]) -> tuple[list[Any], list[dict[str, Any]]]:
+    """The metadata items that hold, AfterValidators aside, and the general settings
+    that do, as Pydantic applies them. Before any callback, it sets them on the schema
+    itself: the last item of each kind holds, and of its general metadata, such as a
+    pattern or to_upper, the last of each setting. Past a callback, it checks each item
+    on its own on the callback's result, so every one holds."""
+    items: list[Any] = []
+    generals: list[dict[str, Any]] = [{}]
+    first = True  # No callback yet.
     for item in metadata:
-        kinds, general = stages[-1]
         if isinstance(item, AfterValidator):
-            stages.append(({}, {}))
+            first = False
         elif type(item) is _GENERAL:
-            general |= {key: value for key, value in vars(item).items() if value is not None}
+            settings = {key: value for key, value in vars(item).items() if value is not None}
+            if first:
+                generals[0] |= settings
+            else:
+                generals.append(settings)
         else:
-            kinds[type(item)] = item
-    return stages
+            if first:
+                items = [other for other in items if type(other) is not type(item)]
+            items.append(item)
+    return items, generals
 
 
 def _grid(metadata: list[Any]) -> Domain | None:
@@ -348,21 +356,20 @@ def _metadata_constraints(
     name: str, domain: Domain, metadata: list[Any], unsupported: list[str]
 ) -> tuple[list[tuple[str, Expr]], Any]:
     """A field's own constraints, as (label, rule) pairs, and its pattern, or None,
-    from its flattened metadata, AfterValidators included, which split it in stages."""
-    result: list[tuple[str, Expr]] = []
+    from its flattened metadata, AfterValidators included."""
     pattern = None
     expression = var(name, domain)
     # Pydantic keeps the last constraint of each kind, with Field() before Annotated[...]:
     # Field(ge=10) on an Annotated[int, Ge(0)] alias leaves ge=0 in force.
-    for kinds, general in _stages(metadata):
-        settings = {key for key, value in general.items() if value is not False}
-        allowed = _SETTINGS.get(domain.kind, set())  # The domain or the pattern holds these.
-        if not settings <= allowed:
-            unmodeled = ", ".join(sorted(settings - allowed))
-            unsupported.append(f"Field {name!r}: unsupported metadata {unmodeled}")
-        elif "pattern" in settings:
-            pattern = general["pattern"]  # Only checked: it never transforms a value.
-        result += _rules(name, domain, expression, kinds.values(), unsupported)
+    items, generals = _applied(metadata)
+    allowed = _SETTINGS.get(domain.kind, set())  # The domain or the pattern holds these.
+    settings = {key for general in generals for key, value in general.items() if value is not False}
+    if not settings <= allowed:  # Code, such as to_upper, whose result a pattern may check.
+        unmodeled = ", ".join(sorted(settings - allowed))
+        unsupported.append(f"Field {name!r}: unsupported metadata {unmodeled}")
+    elif patterns := [general["pattern"] for general in generals if "pattern" in general]:
+        pattern = patterns[-1]  # Only checked: it never transforms a value.
+    result = _rules(name, domain, expression, items, unsupported)
     if domain.digits is not None:  # Pydantic counts digits: |units| < 10**max_digits.
         low, high = (
             const(decode("decimal", sign * 10**domain.digits, domain.scale)) for sign in (-1, 1)
