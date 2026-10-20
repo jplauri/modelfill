@@ -31,6 +31,10 @@
   goes to the parent's constructor as given, and that fallback took any
   `ValueError` or `TypeError` for modelfill's own complaint about the input, so it
   hid the caller's error and ran a factory again.
+- `batch()` takes earlier members' solved values in turn once no candidate remains:
+  the turn counted reused members too, so a value came back out of turn and some
+  combinations with provider values were never tried. A provider repeating a value
+  no longer ends the batch, and neither does a pattern with no string left.
 
 ## 0.5.0
 

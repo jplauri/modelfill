@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
+from itertools import count, cycle
 from typing import Annotated, Any, Literal, get_args
 from uuid import UUID, uuid4
 
@@ -258,6 +259,34 @@ def test_provider_values_tell_batch_members_apart():
     assert [item.flag for item in flagged] == [False, True, False]  # Then the first again.
     with pytest.raises(GenerationExhausted, match="found 2 of 3"):  # The same value cannot.
         ModelFiller(Flagged, providers={UUID: lambda: UUID(int=7)}).batch(3)
+
+
+class Patterned(BaseModel):
+    id: UUID
+    code: str = Field(pattern=r"^ABC$")
+
+
+def test_batch_members_take_turns_with_new_provider_values():
+    # A member's turn was counted among all members, reused ones too, so a candidate
+    # came back out of turn; a provider's repeated value, or no string left for a
+    # pattern, ended the batch.
+    ids = count()
+    flagged = ModelFiller(Flagged, providers={UUID: lambda: UUID(int=next(ids))}).batch(6)
+    assert [item.flag for item in flagged] == [False, True] * 3
+    ids = cycle((0, 1))
+    flagged = ModelFiller(Flagged, providers={UUID: lambda: UUID(int=next(ids))}).batch(4)
+    assert {(item.flag, item.id.int) for item in flagged} == {
+        (False, 0),
+        (False, 1),
+        (True, 0),
+        (True, 1),
+    }
+    ids = iter((0, 0, 1))
+    records = ModelFiller(Record, providers={UUID: lambda: UUID(int=next(ids, 1))}).batch(2)
+    assert [record.id.int for record in records] == [0, 1]
+    ids = count()
+    patterned = ModelFiller(Patterned, providers={UUID: lambda: UUID(int=next(ids))}).batch(2)
+    assert [(item.code, item.id.int) for item in patterned] == [("ABC", 0), ("ABC", 1)]
 
 
 class Grouped(BaseModel):

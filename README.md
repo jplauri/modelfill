@@ -312,7 +312,7 @@ and any unsupported logic inside a nested model makes the whole object fall back
 modelfill generated, solved and provided alike, in canonical order: the canonical
 completion, then the canonical completion of what remains once each earlier one is
 excluded. Once no solved candidate remains, members take earlier members' solved
-values again, in turn, while their provider values still tell them apart. It raises
+values again, in turn, while their provider values tell them apart. It raises
 `GenerationExhausted` when fewer distinct valid completions exist or can be found
 within the budget. When each member gets its own provider values and unsupported
 logic could judge candidates by them, a member first tries again, in order, the

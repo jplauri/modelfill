@@ -442,19 +442,17 @@ class ModelFiller[T]:
                 raise UnsatisfiableConstraints(_contradiction(self.model.__name__, given, rules))
             tried: list[dict[str, Any]] = []  # Every candidate so far, in order; all blocked.
             again: list[dict[str, Any]] = []  # Tried ones to try under new external values.
-            members: list[tuple[dict[str, Any], dict[str, Any]]] = []  # Candidates and inputs.
+            # Once no candidate is left, fresh values, a provider's say, may still tell a
+            # member apart: the members' candidates take turns with them, and each has had
+            # one with these values before new ones are made, as a provider may repeat one.
+            kept: list[dict[str, Any]] = []  # The members' distinct candidates, in order.
+            exhausted, turn, turns = False, 0, 0
             while len(results) < count and failures < self.max_attempts:
                 cost = 0 if again else 1  # A retry costs no attempt: there are only so many.
-                reused = False
+                candidate = None
                 if again:
                     candidate = again.pop(0)
-                elif (results or failures) and not solver.check():
-                    # No candidate is left, but fresh values, a provider's say, may still
-                    # tell a member apart: earlier members' candidates in turn, with them.
-                    if not members or inputs == members[-1][1]:
-                        break  # Every remaining candidate has been tried.
-                    candidate, reused = members[len(results) % len(members)][0], True
-                else:
+                elif not exhausted and (not (results or failures) or solver.check()):
                     # Alternate, so guidance misled by an unknown hook cannot starve the
                     # search, and go without it when it leaves no candidate at all.
                     for guided in (True, False) if guidance and failures % 2 == 0 else (False,):
@@ -468,35 +466,39 @@ class ModelFiller[T]:
                             stuck = str(exc)  # No readable or matching string remains, say.
                             if guided:  # Excluding more candidates never brings one back.
                                 guidance = False
-                    else:
+                    if candidate is not None:
+                        stuck = ""
+                        solver.block(candidate)  # Retries and batch members must differ.
+                        tried.append(candidate)
+                if candidate is None:
+                    exhausted = True
+                    if not kept or not fresh:
                         break
-                    stuck = ""
-                    solver.block(candidate)  # Retries and batch members must differ.
-                    tried.append(candidate)
+                    if turns == len(kept):
+                        inputs, turns = inputs | {path: make() for path, make in fresh.items()}, 0
+                    candidate = kept[turn % len(kept)]
+                    turn, turns = turn + 1, turns + 1
                 try:
                     instance = self._construct(inputs, candidate)
                 except _Rejected as exc:
                     # Even an error at a value chosen for another field may depend on the
                     # solved fields, through info.data, so the search goes on.
                     failures, last_error = failures + cost, exc.__cause__ or exc
-                    if reused:  # The next one tries new fresh values.
-                        inputs = inputs | {path: make() for path, make in fresh.items()}
                     continue
                 # Unsupported logic can turn different candidates into equal objects.
                 generated = [_get(instance, path) for path in (*candidate, *fresh)]
                 if generated in seen:
                     failures += cost
-                    if reused:
-                        inputs = inputs | {path: make() for path, make in fresh.items()}
                     continue
                 seen.append(generated)
-                members.append((candidate, inputs))
+                if candidate not in kept:
+                    kept.append(candidate)
                 results.append(instance)
                 if rng is None and count == 1 and not failures:
                     if len(cache) >= 256:  # Bounded: forget the oldest assignment.
                         del cache[next(iter(cache))]
                     cache[key] = candidate
-                failures = 0
+                failures = turns = 0
                 if len(results) < count:  # Each member gets its own provider values.
                     previous = inputs
                     inputs = inputs | {path: make() for path, make in fresh.items()}
@@ -511,7 +513,7 @@ class ModelFiller[T]:
         found = f"found {len(results)} of {count} distinct completions; " if count > 1 else ""
         if stuck:
             reason = stuck
-        elif failures >= self.max_attempts:
+        elif failures >= self.max_attempts and not exhausted:
             reason = f"no validated completion within {self.max_attempts} attempts"
         else:
             reason = "no candidates remain"

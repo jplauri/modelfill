@@ -276,8 +276,10 @@ modeled, since then external values cannot change which candidates validate or
 what they become. Under unsupported logic, a member whose values differ first tries
 again, in order and without spending attempts, the candidates tried before. Members
 are distinct by every value modelfill generated, a provider's too, so once the
-solver has no candidate left, earlier members' candidates serve again, in turn and
-each spending an attempt, while fresh values still differ from the last member's.
+solver has no candidate left, or no string matches a pattern, the members'
+distinct candidates take turns again, each spending an attempt. Each has a turn
+with the current fresh values before new ones are made, since a provider may
+repeat a value, so the attempts bound how long that goes on.
 Reusing a `ModelFiller` avoids repeated analysis. Each thread receives its own
 solver and private Z3 context; only compiled immutable information is shared.
 Compilation and the top-level convenience filler use bounded LRU caches keyed by
