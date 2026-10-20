@@ -26,6 +26,11 @@
   was one solver variable with a nested field's path, so a field named
   `"child.age"` and the field `age` of `child` had their rules called a
   contradiction.
+- What a provider or a default factory raises propagates from a nested model
+  completed on its own. Under unsupported logic, a dict that cannot be completed
+  goes to the parent's constructor as given, and that fallback took any
+  `ValueError` or `TypeError` for modelfill's own complaint about the input, so it
+  hid the caller's error and ran a factory again.
 
 ## 0.5.0
 

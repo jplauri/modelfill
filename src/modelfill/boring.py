@@ -37,7 +37,7 @@ from pydantic import (
 from pydantic.types import UuidVersion
 
 from .adapters import _flatten, _resolve
-from .errors import ModelFillError
+from .errors import InputError, ModelFillError
 
 MISSING = dataclasses.MISSING
 Fill = Callable[[type, dict[str, Any]], Any]  # Completes a model from some fields.
@@ -192,7 +192,7 @@ def complete(annotation: Any, given: Any, fill: Fill) -> Any:
         for option in members:  # A tagged union's tag rules out the other branches.
             try:
                 completed = complete(option, given, fill)
-            except (ModelFillError, TypeError, ValueError) as error:
+            except (ModelFillError, InputError) as error:
                 failures.append(error)
                 continue
             if completed is given:  # A member of another shape returns it as it is.

@@ -60,7 +60,7 @@ from pydantic.fields import FieldInfo
 from pydantic.types import PathType, Strict, UuidVersion
 from pydantic_core import PydanticUndefined
 
-from .errors import UnsupportedConstraint
+from .errors import InputTypeError, InputValueError, UnsupportedConstraint
 from .ir import (
     INT,
     PRIMITIVES,
@@ -167,12 +167,12 @@ class Adapter:
         fields = {field.name: field for field in self.fields}
         unknown = values.keys() - fields.keys()
         if unknown:
-            raise ValueError(f"Unknown field(s): {', '.join(sorted(unknown))}")
+            raise InputValueError(f"Unknown field(s): {', '.join(sorted(unknown))}")
         for name, value in values.items():
             domain = fields[name].domain
             if domain is not None and not domain.accepts(value):
                 expected = domain.kind + (" or None" if domain.nullable else "")
-                raise TypeError(
+                raise InputTypeError(
                     f"Fixed field {name!r} requires a canonical {expected} value, got {value!r}"
                 )
 

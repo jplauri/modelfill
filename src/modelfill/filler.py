@@ -18,6 +18,9 @@ from .backend import Solver
 from .boring import boring, complete, models_in, nested_model
 from .errors import (
     GenerationExhausted,
+    InputError,
+    InputTypeError,
+    InputValueError,
     ModelFillError,
     UnsatisfiableConstraints,
     UnsupportedConstraint,
@@ -613,14 +616,14 @@ class ModelFiller[T]:
         values = {path: _get(given, path) for path in filler._compiled.domains}
         for path, value in values.items():
             if not filler._compiled.domains[path].accepts(value):
-                raise TypeError(f"{name}.{path} of the given {model.__name__} is {value!r}")
+                raise InputTypeError(f"{name}.{path} of the given {model.__name__} is {value!r}")
         # One that breaks them, by keeping an unchecked default say, is an input error,
         # not a contradiction.
         solver = filler._solver()
         with solver.session(values):
             if not solver.check():
                 conflict = solver.conflict(values, filler._compiled.constraints)
-                raise ValueError(
+                raise InputValueError(
                     f"{name}: the given instance breaks its own rules, which Pydantic does "
                     f"not check again but modelfill solves with "
                     f"({_contradiction(model.__name__, *conflict)}); "
@@ -668,7 +671,7 @@ class ModelFiller[T]:
         the value as given, for the constructor to decide."""
         try:
             return complete(annotation, given, partial(self._fill_nested, name))
-        except (ModelFillError, TypeError, ValueError):
+        except (ModelFillError, InputError):  # The caller's code raises its own errors.
             if not self._compiled.unsupported:
                 raise
             return given

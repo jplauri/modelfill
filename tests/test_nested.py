@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Annotated, NewType
+from uuid import UUID
 
 import pydantic
 import pytest
@@ -386,3 +387,42 @@ def test_unsupported_logic_in_any_nested_model_counts_for_the_parent():
     ModelFiller(CycleMeddler)  # Compiled first, it meets its parent in a cycle.
     with pytest.raises(UnsupportedConstraint, match="Meddler.meddle"):
         ModelFiller(CycleMeddled, mode="strict")
+
+
+class Stamped(BaseModel):
+    id: UUID = UUID(int=7)
+
+
+@pytest.mark.parametrize("error", [ValueError, TypeError])
+def test_what_the_callers_code_raises_in_a_nested_model_propagates(error):
+    # Under unsupported logic, a dict that could not be completed went to the parent as
+    # given, which hid what a provider or a default factory raised and ran the factory
+    # again.
+    def broken():
+        raise error("the caller's bug")
+
+    runs = []
+
+    def broken_once():
+        runs.append(None)
+        if len(runs) == 1:
+            raise error("the caller's bug")
+        return 7
+
+    class Counted(BaseModel):
+        n: int = Field(default_factory=broken_once)
+
+    class Loose(BaseModel):  # Its before validator is unsupported logic.
+        stamped: Stamped | None = None
+        counted: Counted | None = None
+
+        @field_validator("*", mode="before")
+        @classmethod
+        def identity(cls, value):
+            return value
+
+    with pytest.raises(error, match="the caller's bug"):
+        ModelFiller(Loose, providers={"stamped.id": broken}).fill(stamped={})
+    with pytest.raises(error, match="the caller's bug"):
+        ModelFiller(Loose).fill(counted={})
+    assert len(runs) == 1

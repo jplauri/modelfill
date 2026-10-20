@@ -23,3 +23,18 @@ class SolverUnknown(ModelFillError):
 
 class SolverTimeout(SolverUnknown):
     """The solver exhausted its budget: its work limit or the wall-clock safety net."""
+
+
+class InputError(Exception):
+    """A value given to modelfill that it turns down, raised as a ValueError or a
+    TypeError: an unknown field, a value of another type, or a nested instance that
+    breaks its own rules. What the caller's code raises, a provider or a default
+    factory, is never one, so a fallback that takes the value as given cannot hide it."""
+
+
+class InputValueError(InputError, ValueError):
+    pass
+
+
+class InputTypeError(InputError, TypeError):
+    pass

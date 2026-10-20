@@ -294,7 +294,8 @@ member gets its own values. One that provides a required nested model, which is
 solved with its parent, fixes it for the whole call, as an instance or a dict, at
 any depth. Providers apply only to fields the solver does not model, so one that
 targets a solved field, or a path that does not exist, fails when the filler is
-created.
+created. What a provider raises propagates as it is, as does what a default factory
+raises.
 
 A field with no value from any source, such as one of an arbitrary class, raises
 `UnsupportedConstraint`; pass a value or add a provider. If Pydantic keeps rejecting
