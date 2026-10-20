@@ -839,10 +839,16 @@ class Receipt(BaseModel):
 
 def test_a_model_validators_field_name_is_unsupported():
     # Pydantic passes it the field the model is nested in, "refund" here, but it was
-    # read as None, so a refund of -1 was called impossible.
+    # read as None, so a refund of -1 was called impossible. Pydantic 2.10 passed None.
     with pytest.raises(UnsupportedConstraint, match="info.field_name depends on its parent"):
         ModelFiller(Receipt, mode="strict")
-    assert fill(Receipt, refund={"value": -1}).refund.value == -1
+    try:
+        expected = Receipt(refund={"value": -1})
+    except ValidationError:
+        with pytest.raises(GenerationExhausted):
+            fill(Receipt, refund={"value": -1})
+    else:
+        assert fill(Receipt, refund={"value": -1}) == expected
 
 
 def test_field_validator_earlier_field_reads():
