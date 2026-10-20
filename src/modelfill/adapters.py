@@ -358,7 +358,8 @@ def _metadata_constraints(
         settings = {key for key, value in general.items() if value is not False}
         allowed = _SETTINGS.get(domain.kind, set())  # The domain or the pattern holds these.
         if not settings <= allowed:
-            unsupported.append(f"Field {name!r}: unsupported metadata {sorted(settings)}")
+            unmodeled = ", ".join(sorted(settings - allowed))
+            unsupported.append(f"Field {name!r}: unsupported metadata {unmodeled}")
         elif "pattern" in settings:
             pattern = general["pattern"]  # Only checked: it never transforms a value.
         result += _rules(name, domain, expression, kinds.values(), unsupported)
